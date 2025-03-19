@@ -47,7 +47,7 @@ def get_10min_data(symbol, num_bars=100):
 
     # Sort by time
     df.sort_index(inplace=True)
-    print(f"Retrieved {len(df)} 10-minute bars for {symbol}")
+    #print(f"Retrieved {len(df)} 10-minute bars for {symbol}")
 
     return df
 

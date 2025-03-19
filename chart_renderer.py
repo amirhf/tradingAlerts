@@ -1,4 +1,3 @@
-# python
 """
 Chart rendering functions for MT5 Chart Application
 """
@@ -21,6 +20,7 @@ SENDER_EMAIL = "sender@example.com"
 RECEIVER_EMAIL = "receiver@example.com"
 LOGIN = "sender@example.com"
 PASSWORD = "your_password"
+
 
 def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
     """
@@ -57,6 +57,11 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
     # Use the initial dataframe as a starting point
     current_df = initial_df.copy() if initial_df is not None else None
 
+    # Track the last candle we've seen to detect new closes
+    last_seen_candle_time = None
+    if current_df is not None and not current_df.empty:
+        last_seen_candle_time = current_df.index[-1]
+
     # Main chart update loop
     while True:
         try:
@@ -65,6 +70,25 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
 
             # Update current_df if new data is available
             if new_df is not None and not new_df.empty:
+                # Check for closed candles
+                if current_df is not None and not current_df.empty:
+                    # Compare the latest candle timestamps
+                    if new_df.index[-1] > last_seen_candle_time:
+                        # A new candle has appeared, which means the previous one has closed
+                        # The closed candle would be the last one from the previous dataframe
+                        closed_candle = current_df.iloc[-1]
+                        closed_time = last_seen_candle_time
+                        print(f"Candle closed at {closed_time}: Open={closed_candle['Open']:.{digits}f}, "
+                              f"High={closed_candle['High']:.{digits}f}, Low={closed_candle['Low']:.{digits}f}, "
+                              f"Close={closed_candle['Close']:.{digits}f}")
+
+                        # Perform analysis on the closed candle if needed
+                        # (e.g., check for patterns, calculate indicators, etc.)
+
+                        # Update our tracking variable to the latest candle time
+                        last_seen_candle_time = new_df.index[-1]
+
+                # Update the current dataframe with the new data
                 current_df = new_df
             elif current_df is None or current_df.empty:
                 print("No data available. Retrying...")
@@ -110,17 +134,6 @@ def update_chart(fig, price_ax, title, df, symbol, digits, price_levels):
     chart_time_str = market_time.strftime("%Y-%m-%d %H:%M:%S")
     title.set_text(f'{symbol} 10-Minute Chart\nLast Price: {price_str} | Latest Bar Time: {chart_time_str}')
 
-    # Detect if the current candle is closed using a simple heuristic.
-    now = datetime.now()
-    last_candle_time = df.index[-1]
-    if len(df) > 1:
-        candle_interval = (df.index[-1] - df.index[-2]).total_seconds()
-    else:
-        # Default to 10 minutes if only one data point exists
-        candle_interval = 600
-    if (now - last_candle_time).total_seconds() >= candle_interval:
-        print(f"Candle closed at {last_candle_time}: Close Price {last_price:.{digits}f}")
-
     # Clear previous plot contents
     price_ax.clear()
 
@@ -149,7 +162,7 @@ def update_chart(fig, price_ax, title, df, symbol, digits, price_levels):
     format_axes(price_ax, digits)
 
     # Apply tight layout and refresh
-    plt.tight_layout()
+    #    plt.tight_layout()
     plt.subplots_adjust(top=0.90)  # More space for title
     fig.canvas.draw()
     fig.canvas.flush_events()
@@ -162,7 +175,7 @@ def draw_candles_and_volume(price_ax, df, dates, width):
     down_color = 'crimson'
     wick_color = 'white'
     reversal_bearish_color = 'orange'  # For bearish failure
-    reversal_bullish_color = 'white'   # For bullish failure
+    reversal_bullish_color = 'white'  # For bullish failure
 
     # Draw each candle and volume bar
     for i in range(len(df)):
@@ -239,12 +252,18 @@ def set_axis_limits(price_ax, df, dates, price_levels):
 def draw_price_levels(price_ax, price_levels, x_min, digits):
     """Draw price levels on the chart"""
     level_styles = {
-        'today_open': {'color': 'yellow', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Daily Open', 'valign': 'bottom'},
-        'yesterday_open': {'color': 'orange', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day Open', 'valign': 'bottom'},
-        'yesterday_high': {'color': 'lime', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day High', 'valign': 'bottom'},
-        'yesterday_low': {'color': 'red', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day Low', 'valign': 'top'},
-        'prev_week_high': {'color': 'cyan', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8, 'label': 'Prev Week High', 'valign': 'bottom'},
-        'prev_week_low': {'color': 'magenta', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8, 'label': 'Prev Week Low', 'valign': 'top'}
+        'today_open': {'color': 'yellow', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Daily Open',
+                       'valign': 'bottom'},
+        'yesterday_open': {'color': 'orange', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8,
+                           'label': 'Prev Day Open', 'valign': 'bottom'},
+        'yesterday_high': {'color': 'lime', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day High',
+                           'valign': 'bottom'},
+        'yesterday_low': {'color': 'red', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day Low',
+                          'valign': 'top'},
+        'prev_week_high': {'color': 'cyan', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
+                           'label': 'Prev Week High', 'valign': 'bottom'},
+        'prev_week_low': {'color': 'magenta', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
+                          'label': 'Prev Week Low', 'valign': 'top'}
     }
     levels_to_draw = []
     for level_name, style in level_styles.items():
@@ -260,7 +279,7 @@ def draw_price_levels(price_ax, price_levels, x_min, digits):
     min_gap = price_range * min_gap_pct
     for i in range(1, len(levels_to_draw)):
         curr = levels_to_draw[i]
-        prev = levels_to_draw[i-1]
+        prev = levels_to_draw[i - 1]
         if prev['value'] - curr['value'] < min_gap:
             if prev['style']['valign'] == curr['style']['valign']:
                 curr['style']['valign'] = 'top' if prev['style']['valign'] == 'bottom' else 'bottom'
