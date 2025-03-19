@@ -1,7 +1,9 @@
+# python
 """
 Chart rendering functions for MT5 Chart Application
 """
 import matplotlib
+from datetime import datetime
 
 from candle_patterns import detect_reversal_pattern
 
@@ -99,7 +101,7 @@ def update_chart(fig, price_ax, title, df, symbol, digits, price_levels):
         df: DataFrame with current OHLC data
         symbol: Trading symbol
         digits: Price decimal digits
-        daily_levels: Dictionary with daily price levels
+        price_levels: Dictionary with daily/weekly price levels
     """
     # Update chart title with latest info
     last_price = df['Close'].iloc[-1]
@@ -107,6 +109,17 @@ def update_chart(fig, price_ax, title, df, symbol, digits, price_levels):
     market_time = df.index[-1]
     chart_time_str = market_time.strftime("%Y-%m-%d %H:%M:%S")
     title.set_text(f'{symbol} 10-Minute Chart\nLast Price: {price_str} | Latest Bar Time: {chart_time_str}')
+
+    # Detect if the current candle is closed using a simple heuristic.
+    now = datetime.now()
+    last_candle_time = df.index[-1]
+    if len(df) > 1:
+        candle_interval = (df.index[-1] - df.index[-2]).total_seconds()
+    else:
+        # Default to 10 minutes if only one data point exists
+        candle_interval = 600
+    if (now - last_candle_time).total_seconds() >= candle_interval:
+        print(f"Candle closed at {last_candle_time}: Close Price {last_price:.{digits}f}")
 
     # Clear previous plot contents
     price_ax.clear()
@@ -148,8 +161,8 @@ def draw_candles_and_volume(price_ax, df, dates, width):
     up_color = 'limegreen'
     down_color = 'crimson'
     wick_color = 'white'
-    reversal_bearish_color = 'orange'  # For bearish failure (high > prev high, close < prev low)
-    reversal_bullish_color = 'white'  # For bullish failure (low < prev low, close > prev high)
+    reversal_bearish_color = 'orange'  # For bearish failure
+    reversal_bullish_color = 'white'   # For bullish failure
 
     # Draw each candle and volume bar
     for i in range(len(df)):
@@ -164,31 +177,19 @@ def draw_candles_and_volume(price_ax, df, dates, width):
         if close >= open_price:
             color = up_color
             body_bottom = open_price
-            body_height = max(close - open_price, 0.000001)  # Ensure non-zero height
+            body_height = max(close - open_price, 0.000001)
         else:
             color = down_color
             body_bottom = close
-            body_height = max(open_price - close, 0.000001)  # Ensure non-zero height
+            body_height = max(open_price - close, 0.000001)
 
         if i > 0:
-            # Check for reversal patterns
             is_bearish_reversal, is_bullish_reversal = detect_reversal_pattern(df, i)
             if is_bearish_reversal:
                 color = reversal_bearish_color
             elif is_bullish_reversal:
                 color = reversal_bullish_color
-            '''
-            prev_high = float(df['High'].iloc[i - 1])
-            prev_low = float(df['Low'].iloc[i - 1])
 
-            # Bearish failure: high > prev high but close < prev low
-            if high > prev_high and close < prev_low:
-                color = reversal_bearish_color
-
-            # Bullish failure: low < prev low but close > prev high
-            elif low < prev_low and close > prev_high:
-                color = reversal_bullish_color
-        '''
         # Draw candle body
         rect = plt.Rectangle(
             (date - width / 2, body_bottom),
@@ -211,48 +212,32 @@ def draw_candles_and_volume(price_ax, df, dates, width):
         )
 
 
-
 def set_axis_limits(price_ax, df, dates, price_levels):
     """Calculate and set axis limits"""
-    # Calculate price range
     price_min = df['Low'].min()
     price_max = df['High'].max()
-
-    # Include all price levels in the range calculation if available
     if price_levels:
-        # Start with required levels
         level_values = [
             price_levels['today_open'],
             price_levels['yesterday_high'],
             price_levels['yesterday_low'],
             price_levels['yesterday_open']
         ]
-
-        # Add weekly levels if available
         if 'prev_week_high' in price_levels:
             level_values.append(price_levels['prev_week_high'])
         if 'prev_week_low' in price_levels:
             level_values.append(price_levels['prev_week_low'])
-
-        # Update min and max
-        #price_min = min(price_min, min(level_values))
-        #price_max = max(price_max, max(level_values))
-
     price_range = price_max - price_min
-    price_margin = price_range * 0.1  # 5% margin
-
-    # Set x and y axis limits with margins
+    price_margin = price_range * 0.1
     x_min = dates[0]
     x_max = dates[-1]
     x_margin = (x_max - x_min) * 0.05
-
     price_ax.set_ylim(price_min - price_margin, price_max + price_margin)
     price_ax.set_xlim(x_min - x_margin, x_max + x_margin)
 
 
 def draw_price_levels(price_ax, price_levels, x_min, digits):
     """Draw price levels on the chart"""
-    # Define colors and styles for different levels
     level_styles = {
         'today_open': {'color': 'yellow', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Daily Open', 'valign': 'bottom'},
         'yesterday_open': {'color': 'orange', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day Open', 'valign': 'bottom'},
@@ -261,8 +246,6 @@ def draw_price_levels(price_ax, price_levels, x_min, digits):
         'prev_week_high': {'color': 'cyan', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8, 'label': 'Prev Week High', 'valign': 'bottom'},
         'prev_week_low': {'color': 'magenta', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8, 'label': 'Prev Week Low', 'valign': 'top'}
     }
-
-    # Sort levels by value for better label placement
     levels_to_draw = []
     for level_name, style in level_styles.items():
         if level_name in price_levels:
@@ -271,52 +254,33 @@ def draw_price_levels(price_ax, price_levels, x_min, digits):
                 'value': price_levels[level_name],
                 'style': style
             })
-
-    # Sort from highest to lowest
     levels_to_draw.sort(key=lambda x: x['value'], reverse=True)
-
-    # Adjust vertical alignment for closer levels to prevent overlap
-    min_gap_pct = 0.01  # Minimum gap as percentage of price range
+    min_gap_pct = 0.01
     price_range = price_ax.get_ylim()[1] - price_ax.get_ylim()[0]
     min_gap = price_range * min_gap_pct
-
-    # Check distances between consecutive levels
     for i in range(1, len(levels_to_draw)):
         curr = levels_to_draw[i]
         prev = levels_to_draw[i-1]
-
-        # If levels are too close, adjust text vertical alignment
         if prev['value'] - curr['value'] < min_gap:
-            # Make sure they have opposite alignments
             if prev['style']['valign'] == curr['style']['valign']:
                 curr['style']['valign'] = 'top' if prev['style']['valign'] == 'bottom' else 'bottom'
-
-    # Draw each level line and label
     for level_info in levels_to_draw:
         level_name = level_info['name']
         level_value = level_info['value']
         style = level_info['style']
-
-        # Draw horizontal line
         price_ax.axhline(y=level_value, color=style['color'],
-                     linestyle=style['linestyle'],
-                     linewidth=style['linewidth'],
-                     alpha=style['alpha'])
-
-        # Add text label
+                         linestyle=style['linestyle'],
+                         linewidth=style['linewidth'],
+                         alpha=style['alpha'])
         formatted_price = f"{level_value:.{digits}f}"
         price_ax.text(x_min, level_value, f"{style['label']}: {formatted_price}",
-                 color=style['color'], fontsize=9,
-                 verticalalignment=style['valign'],
-                 horizontalalignment='left', backgroundcolor='black', alpha=0.9)
+                      color=style['color'], fontsize=9,
+                      verticalalignment=style['valign'],
+                      horizontalalignment='left', backgroundcolor='black', alpha=0.9)
 
 
 def format_axes(price_ax, digits):
     """Format chart axes"""
-    # Price axis
     price_ax.set_ylabel(f'Price (Digits: {digits})')
     price_ax.grid(True, alpha=0.3)
-
-
-    # Format labels
     plt.setp(price_ax.get_xticklabels(), visible=False)
