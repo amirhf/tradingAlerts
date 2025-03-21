@@ -27,10 +27,8 @@ PASSWORD = os.getenv("PASSWORD")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
 
-print(f"SMTP_SERVER: {SMTP_SERVER}", f"PORT: {PORT}", f"LOGIN: {LOGIN}", f"PASSWORD: {PASSWORD}", f"SENDER_EMAIL: {SENDER_EMAIL}", f"RECEIVER_EMAIL: {RECEIVER_EMAIL}")
 
-
-def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
+def plot_candlestick_chart(initial_df, symbol, refresh_interval=60, send_notifications=True):
     """
     Plot and continuously update a live candlestick chart with daily levels
 
@@ -38,6 +36,7 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
         initial_df (pandas.DataFrame): Initial dataframe with OHLC data
         symbol (str): The trading symbol
         refresh_interval (int): Chart refresh interval in seconds
+        send_notifications (bool): Whether to send email notifications for signals
     """
     # Setup style and get symbol information
     plt.style.use('dark_background')
@@ -61,6 +60,7 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
             print(f"  {key}: {value:.{digits}f}")
     else:
         print(f"Could not retrieve price levels for {symbol}")
+        price_levels = {}  # Use empty dict if levels can't be retrieved
 
     # Use the initial dataframe as a starting point
     current_df = initial_df.copy() if initial_df is not None else None
@@ -79,26 +79,36 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
             # Update current_df if new data is available
             if new_df is not None and not new_df.empty:
                 # Check for closed candles
-                if current_df is not None and not current_df.empty:
+                if current_df is not None and not current_df.empty and last_seen_candle_time is not None:
                     # Compare the latest candle timestamps
                     if new_df.index[-1] > last_seen_candle_time:
                         # A new candle has appeared, which means the previous one has closed
                         # The closed candle would be the last one from the previous dataframe
                         closed_candle = current_df.iloc[-1]
-                        previous_candle = current_df.iloc[-2]
-                        previous2_candle = current_df.iloc[-3]
-                        closed_time = closed_candle.index[-1]
-                        candle_type, touch_levels= analyse_candle(closed_candle, previous_candle, previous2_candle, price_levels)
-                        print(f" {symbol}Candle closed at {closed_time}, type: {candle_type}, touch levels: {touch_levels}")
 
-                        if candle_type != "none" and len(touch_levels)>=1:
-                            send_email_notification(subject=f"{symbol}:Special Candle Detected: {candle_type}",
-                                                     body=f"detected: {candle_type}  at {closed_time}. Touched levels: {touch_levels}",
-                                                    sender_email= SENDER_EMAIL, receiver_email=RECEIVER_EMAIL,
-                                                    smtp_server=SMTP_SERVER,  login=LOGIN, password=PASSWORD)
+                        # Ensure we have enough data for analysis
+                        if len(current_df) >= 3:
+                            previous_candle = current_df.iloc[-2]
+                            previous2_candle = current_df.iloc[-3]
+                            closed_time = last_seen_candle_time
 
-                        # Perform analysis on the closed candle if needed
-                        # (e.g., check for patterns, calculate indicators, etc.)
+                            candle_type, touch_levels = analyse_candle(
+                                closed_candle, previous_candle, previous2_candle, price_levels
+                            )
+
+                            print(f"{symbol} Candle closed at {closed_time}, type: {candle_type}, touch levels: {touch_levels}")
+
+                            # Send notification if it's a significant candle and notifications are enabled
+                            if send_notifications and candle_type != "none" and len(touch_levels) >= 1:
+                                send_email_notification(
+                                    subject=f"{symbol}: {candle_type.upper()} Pattern Detected",
+                                    body=f"Symbol: {symbol}\nTime: {closed_time}\nPattern: {candle_type}\nTouched levels: {touch_levels}\n\nPrice: {closed_candle['Close']}",
+                                    sender_email=SENDER_EMAIL,
+                                    receiver_email=RECEIVER_EMAIL,
+                                    smtp_server=SMTP_SERVER,
+                                    login=LOGIN,
+                                    password=PASSWORD
+                                )
 
                         # Update our tracking variable to the latest candle time
                         last_seen_candle_time = new_df.index[-1]
@@ -182,6 +192,54 @@ def update_chart(fig, price_ax, title, df, symbol, digits, price_levels):
     fig.canvas.draw()
     fig.canvas.flush_events()
 
+def draw_price_levels(price_ax, price_levels, x_min, digits):
+    """Draw price levels on the chart"""
+    level_styles = {
+        'today_open': {'color': 'yellow', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Daily Open',
+                       'valign': 'bottom'},
+        'yesterday_open': {'color': 'orange', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8,
+                           'label': 'Prev Day Open', 'valign': 'bottom'},
+        'yesterday_high': {'color': 'lime', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day High',
+                           'valign': 'bottom'},
+        'yesterday_low': {'color': 'red', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day Low',
+                          'valign': 'top'},
+        'prev_week_high': {'color': 'cyan', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
+                           'label': 'Prev Week High', 'valign': 'bottom'},
+        'prev_week_low': {'color': 'magenta', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
+                          'label': 'Prev Week Low', 'valign': 'top'}
+    }
+    levels_to_draw = []
+    for level_name, style in level_styles.items():
+        if level_name in price_levels:
+            levels_to_draw.append({
+                'name': level_name,
+                'value': price_levels[level_name],
+                'style': style
+            })
+    levels_to_draw.sort(key=lambda x: x['value'], reverse=True)
+    min_gap_pct = 0.01
+    price_range = price_ax.get_ylim()[1] - price_ax.get_ylim()[0]
+    min_gap = price_range * min_gap_pct
+    for i in range(1, len(levels_to_draw)):
+        curr = levels_to_draw[i]
+        prev = levels_to_draw[i - 1]
+        if prev['value'] - curr['value'] < min_gap:
+            if prev['style']['valign'] == curr['style']['valign']:
+                curr['style']['valign'] = 'top' if prev['style']['valign'] == 'bottom' else 'bottom'
+    for level_info in levels_to_draw:
+        level_name = level_info['name']
+        level_value = level_info['value']
+        style = level_info['style']
+        price_ax.axhline(y=level_value, color=style['color'],
+                         linestyle=style['linestyle'],
+                         linewidth=style['linewidth'],
+                         alpha=style['alpha'])
+        formatted_price = f"{level_value:.{digits}f}"
+        price_ax.text(x_min, level_value, f"{style['label']}: {formatted_price}",
+                      color=style['color'], fontsize=9,
+                      verticalalignment=style['valign'],
+                      horizontalalignment='left', backgroundcolor='black', alpha=0.9)
+
 
 def draw_candles_and_volume(price_ax, df, dates, width):
     """Draw candlesticks and volume bars"""
@@ -245,73 +303,21 @@ def set_axis_limits(price_ax, df, dates, price_levels):
     price_min = df['Low'].min()
     price_max = df['High'].max()
     if price_levels:
-        level_values = [
-            price_levels['today_open'],
-            price_levels['yesterday_high'],
-            price_levels['yesterday_low'],
-            price_levels['yesterday_open']
-        ]
+        # Check if key levels exist before adding them to level_values
+        level_values = []
+        for key in ['today_open', 'yesterday_high', 'yesterday_low', 'yesterday_open']:
+            if key in price_levels:
+                level_values.append(price_levels[key])
+
         if 'prev_week_high' in price_levels:
             level_values.append(price_levels['prev_week_high'])
         if 'prev_week_low' in price_levels:
             level_values.append(price_levels['prev_week_low'])
-    price_range = price_max - price_min
-    price_margin = price_range * 0.1
-    x_min = dates[0]
-    x_max = dates[-1]
-    x_margin = (x_max - x_min) * 0.05
-    price_ax.set_ylim(price_min - price_margin, price_max + price_margin)
-    price_ax.set_xlim(x_min - x_margin, x_max + x_margin)
 
-
-def draw_price_levels(price_ax, price_levels, x_min, digits):
-    """Draw price levels on the chart"""
-    level_styles = {
-        'today_open': {'color': 'yellow', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Daily Open',
-                       'valign': 'bottom'},
-        'yesterday_open': {'color': 'orange', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8,
-                           'label': 'Prev Day Open', 'valign': 'bottom'},
-        'yesterday_high': {'color': 'lime', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day High',
-                           'valign': 'bottom'},
-        'yesterday_low': {'color': 'red', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Prev Day Low',
-                          'valign': 'top'},
-        'prev_week_high': {'color': 'cyan', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
-                           'label': 'Prev Week High', 'valign': 'bottom'},
-        'prev_week_low': {'color': 'magenta', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
-                          'label': 'Prev Week Low', 'valign': 'top'}
-    }
-    levels_to_draw = []
-    for level_name, style in level_styles.items():
-        if level_name in price_levels:
-            levels_to_draw.append({
-                'name': level_name,
-                'value': price_levels[level_name],
-                'style': style
-            })
-    levels_to_draw.sort(key=lambda x: x['value'], reverse=True)
-    min_gap_pct = 0.01
-    price_range = price_ax.get_ylim()[1] - price_ax.get_ylim()[0]
-    min_gap = price_range * min_gap_pct
-    for i in range(1, len(levels_to_draw)):
-        curr = levels_to_draw[i]
-        prev = levels_to_draw[i - 1]
-        if prev['value'] - curr['value'] < min_gap:
-            if prev['style']['valign'] == curr['style']['valign']:
-                curr['style']['valign'] = 'top' if prev['style']['valign'] == 'bottom' else 'bottom'
-    for level_info in levels_to_draw:
-        level_name = level_info['name']
-        level_value = level_info['value']
-        style = level_info['style']
-        price_ax.axhline(y=level_value, color=style['color'],
-                         linestyle=style['linestyle'],
-                         linewidth=style['linewidth'],
-                         alpha=style['alpha'])
-        formatted_price = f"{level_value:.{digits}f}"
-        price_ax.text(x_min, level_value, f"{style['label']}: {formatted_price}",
-                      color=style['color'], fontsize=9,
-                      verticalalignment=style['valign'],
-                      horizontalalignment='left', backgroundcolor='black', alpha=0.9)
-
+        # Include level values in the axis limits calculation
+        for level_value in level_values:
+            price_min = min(price_min, level_value)
+            price_max = max(price_max, level_value)
 
 def format_axes(price_ax, digits):
     """Format chart axes"""
