@@ -5,6 +5,7 @@ import matplotlib
 from datetime import datetime
 
 from candle_patterns import detect_reversal_pattern
+from notifications import send_email_notification
 
 matplotlib.use('TkAgg')  # Force using TkAgg backend
 import matplotlib.pyplot as plt
@@ -13,13 +14,20 @@ import numpy as np
 import MetaTrader5 as mt5
 
 from data_fetcher import get_10min_data, get_price_levels
+from candle_patterns import analyse_candle
+import dotenv
+import os
 
-SMTP_SERVER = "smtp.example.com"
-PORT = 465
-SENDER_EMAIL = "sender@example.com"
-RECEIVER_EMAIL = "receiver@example.com"
-LOGIN = "sender@example.com"
-PASSWORD = "your_password"
+dotenv.load_dotenv()
+# Read email settings from environment variables
+SMTP_SERVER = os.getenv("SMTP_SERVER")
+PORT = int(os.getenv("PORT"))
+LOGIN = os.getenv("LOGIN")
+PASSWORD = os.getenv("PASSWORD")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
+
+print(f"SMTP_SERVER: {SMTP_SERVER}", f"PORT: {PORT}", f"LOGIN: {LOGIN}", f"PASSWORD: {PASSWORD}", f"SENDER_EMAIL: {SENDER_EMAIL}", f"RECEIVER_EMAIL: {RECEIVER_EMAIL}")
 
 
 def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
@@ -77,10 +85,17 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60):
                         # A new candle has appeared, which means the previous one has closed
                         # The closed candle would be the last one from the previous dataframe
                         closed_candle = current_df.iloc[-1]
+                        previous_candle = current_df.iloc[-2]
+                        previous2_candle = current_df.iloc[-3]
                         closed_time = last_seen_candle_time
-                        print(f"Candle closed at {closed_time}: Open={closed_candle['Open']:.{digits}f}, "
-                              f"High={closed_candle['High']:.{digits}f}, Low={closed_candle['Low']:.{digits}f}, "
-                              f"Close={closed_candle['Close']:.{digits}f}")
+                        candle_type, touch_levels= analyse_candle(closed_candle, previous_candle, previous2_candle, price_levels)
+                        print(f" {symbol}Candle closed at {closed_time}, type: {candle_type}, touch levels: {touch_levels}")
+
+                        if candle_type != "none" and len(touch_levels)>=1:
+                            send_email_notification(subject=f"{symbol}:Special Candle Detected: {candle_type}",
+                                                     body=f"detected: {candle_type}  at {closed_time}. Touched levels: {touch_levels}",
+                                                    sender_email= SENDER_EMAIL, receiver_email=RECEIVER_EMAIL,
+                                                    smtp_server=SMTP_SERVER,  login=LOGIN, password=PASSWORD)
 
                         # Perform analysis on the closed candle if needed
                         # (e.g., check for patterns, calculate indicators, etc.)
@@ -197,7 +212,7 @@ def draw_candles_and_volume(price_ax, df, dates, width):
             body_height = max(open_price - close, 0.000001)
 
         if i > 0:
-            is_bearish_reversal, is_bullish_reversal = detect_reversal_pattern(df, i)
+            is_bullish_reversal, is_bearish_reversal  = detect_reversal_pattern(df, i)
             if is_bearish_reversal:
                 color = reversal_bearish_color
             elif is_bullish_reversal:
