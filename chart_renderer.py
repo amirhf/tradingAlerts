@@ -5,7 +5,7 @@ import matplotlib
 from datetime import datetime
 
 from candle_patterns import detect_reversal_pattern
-from notifications import send_email_notification
+from notifications import send_notification
 
 matplotlib.use('TkAgg')  # Force using TkAgg backend
 import matplotlib.pyplot as plt
@@ -15,18 +15,6 @@ import MetaTrader5 as mt5
 
 from data_fetcher import get_10min_data, get_price_levels
 from candle_patterns import analyse_candle
-import dotenv
-import os
-
-dotenv.load_dotenv()
-# Read email settings from environment variables
-SMTP_SERVER = os.getenv("SMTP_SERVER")
-PORT = int(os.getenv("PORT"))
-LOGIN = os.getenv("LOGIN")
-PASSWORD = os.getenv("PASSWORD")
-SENDER_EMAIL = os.getenv("SENDER_EMAIL")
-RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
-
 
 def plot_candlestick_chart(initial_df, symbol, refresh_interval=60, send_notifications=True):
     """
@@ -100,14 +88,9 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60, send_notific
 
                             # Send notification if it's a significant candle and notifications are enabled
                             if send_notifications and candle_type != "none" and len(touch_levels) >= 1:
-                                send_email_notification(
+                                send_notification(
                                     subject=f"{symbol}: {candle_type.upper()} Pattern Detected",
                                     body=f"Symbol: {symbol}\nTime: {closed_time}\nPattern: {candle_type}\nTouched levels: {touch_levels}\n\nPrice: {closed_candle['Close']}",
-                                    sender_email=SENDER_EMAIL,
-                                    receiver_email=RECEIVER_EMAIL,
-                                    smtp_server=SMTP_SERVER,
-                                    login=LOGIN,
-                                    password=PASSWORD
                                 )
 
                         # Update our tracking variable to the latest candle time

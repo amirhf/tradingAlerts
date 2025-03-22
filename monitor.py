@@ -4,23 +4,11 @@ Multi-symbol monitoring functionality for MT5 Chart Application
 import time
 import threading
 from datetime import datetime
-import pandas as pd
 import MetaTrader5 as mt5
-import os
-import dotenv
 
 from data_fetcher import get_10min_data, get_price_levels
 from candle_patterns import analyse_candle
-from notifications import send_email_notification
-
-dotenv.load_dotenv()
-# Read email settings from environment variables
-SMTP_SERVER = os.getenv("SMTP_SERVER")
-PORT = int(os.getenv("PORT"))
-LOGIN = os.getenv("LOGIN")
-PASSWORD = os.getenv("PASSWORD")
-SENDER_EMAIL = os.getenv("SENDER_EMAIL")
-RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
+from notifications import send_notification
 
 
 def monitor_symbol(symbol, symbol_data, stop_event):
@@ -94,14 +82,9 @@ def monitor_symbol(symbol, symbol_data, stop_event):
                             }
 
                             # Send notification
-                            send_email_notification(
+                            send_notification(
                                 subject=f"{symbol}: {candle_type.upper()} Pattern Detected",
                                 body=f"Symbol: {symbol}\nTime: {last_candle_time}\nPattern: {candle_type}\nTouched levels: {touch_levels}\n\nPrice: {closed_candle['Close']}",
-                                sender_email=SENDER_EMAIL,
-                                receiver_email=RECEIVER_EMAIL,
-                                smtp_server=SMTP_SERVER,
-                                login=LOGIN,
-                                password=PASSWORD
                             )
 
                     # Update the last candle time
@@ -158,7 +141,7 @@ def monitor_multiple_symbols(symbols):
                 if last_signal:
                     print(f"{symbol}: Last signal at {last_signal['time']} - {last_signal['type']}")
                 else:
-                    print(f"{symbol}: No signals yet")
+                    print(f"{symbol}: No signals yet, close time: {symbols_data[symbol].get('last_candle_time')}")
 
             print("--------------------\n")
 
@@ -183,6 +166,7 @@ if __name__ == "__main__":
         default_symbols = "EURUSD,GBPUSD,XAUUSD,USDCHF"
         symbols_input = input(f"Enter symbols to monitor (comma-separated, default: {default_symbols}): ") or default_symbols
         symbols = [s.strip().upper() for s in symbols_input.split(",")]
+        send_notification("MT5 Monitor Started", f"Monitoring symbols: {', '.join(symbols)}")
 
         # Verify symbols
         valid_symbols = []

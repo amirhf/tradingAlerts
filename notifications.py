@@ -7,29 +7,79 @@ import time
 import threading
 import os
 import dotenv
+import requests
 
 # Notification management
 _notification_lock = threading.Lock()
 _last_email_time = {}  # Dictionary to track last email time for rate limiting
 
+def send_push_notification(subject, body):
+    """
+    Send push notification with rate limiting to prevent flooding
 
-def send_email_notification(subject, body, sender_email, receiver_email, smtp_server, login, password, port=587):
+    Args:
+        subject (str): Notification subject
+        body (str): Notification body
+
+    Returns:
+        bool: Success status
+    """
+    # Load environment variables
+    dotenv.load_dotenv()
+    ntfy_topic = os.getenv("NTFY_TOPIC")
+
+    # Extract symbol from subject if available (for rate limiting per symbol)
+    symbol = subject.split(':')[0].strip() if ':' in subject else 'general'
+
+    # Check rate limiting (no more than one push notification per symbol per minute)
+    with _notification_lock:
+        current_time = time.time()
+        if symbol in _last_email_time:
+            time_since_last = current_time - _last_email_time[symbol]
+            if time_since_last < 60:  # Less than 60 seconds since last notification for this symbol
+                print(f"Rate limiting push notification for {symbol}. Last notification sent {time_since_last:.1f} seconds ago.")
+                return False
+
+        # Update last notification time for this symbol
+        _last_email_time[symbol] = current_time
+
+    try:
+        # Send push notification
+        url = f"https://ntfy.sh/{ntfy_topic}"
+        data = f"{subject}\n{body}"
+
+        response = requests.post(url, data=data)
+        if response.status_code == 200:
+            print(f"Push notification sent: {subject}")
+            return True
+        else:
+            print(f"Failed to send push notification: {response.text}")
+            return False
+
+    except Exception as e:
+        print(f"Failed to send push notification: {e}")
+        return False
+
+def send_email_notification(subject, body):
     """
     Send email notification with rate limiting to prevent flooding
 
     Args:
         subject (str): Email subject
         body (str): Email body
-        sender_email (str): Sender email address
-        receiver_email (str): Receiver email address
-        smtp_server (str): SMTP server address
-        login (str): SMTP login
-        password (str): SMTP password
-        port (int, optional): SMTP port. Defaults to 587.
 
     Returns:
         bool: Success status
     """
+    # Load environment variables
+    dotenv.load_dotenv()
+    sender_email = os.getenv("SENDER_EMAIL")
+    receiver_email = os.getenv("RECEIVER_EMAIL")
+    smtp_server = os.getenv("SMTP_SERVER")
+    login = os.getenv("LOGIN")
+    password = os.getenv("PASSWORD")
+    port = int(os.getenv("PORT", 587))
+
     # Extract symbol from subject if available (for rate limiting per symbol)
     symbol = subject.split(':')[0].strip() if ':' in subject else 'general'
 
@@ -68,8 +118,23 @@ def send_email_notification(subject, body, sender_email, receiver_email, smtp_se
         print(f"Failed to send email notification: {e}")
         return False
 
+def send_notification(subject, body):
+    """
+    Send a notification via email and push notification
 
-def send_batch_notification(signals, sender_email, receiver_email, smtp_server, login, password):
+    Args:
+        subject (str): Notification subject
+        body (str): Notification body
+
+    Returns:
+        bool: Success status
+    """
+   # email_sent = send_email_notification(subject, body)
+    push_sent = send_push_notification(subject, body)
+
+    return  push_sent #or email_sent
+
+def send_batch_notification(signals):
     """
     Send a batch notification combining multiple signals
 
@@ -111,36 +176,18 @@ def send_batch_notification(signals, sender_email, receiver_email, smtp_server, 
 
     return send_email_notification(
         subject=subject,
-        body=body,
-        sender_email=sender_email,
-        receiver_email=receiver_email,
-        smtp_server=smtp_server,
-        login=login,
-        password=password
+        body=body
     )
 
 
 # Testing function
 if __name__ == "__main__":
-    dotenv.load_dotenv()
 
-    # Read email settings from environment variables
-    smtp_server = os.getenv("SMTP_SERVER")
-    login = os.getenv("LOGIN")
-    password = os.getenv("PASSWORD")
-    sender_email = os.getenv("SENDER_EMAIL")
-    receiver_email = os.getenv("RECEIVER_EMAIL")
-
-    if all([smtp_server, login, password, sender_email, receiver_email]):
+    if all([]):
         # Test single notification
         send_email_notification(
             subject="Test Notification",
             body="This is a test email from the updated notification system.",
-            sender_email=sender_email,
-            receiver_email=receiver_email,
-            smtp_server=smtp_server,
-            login=login,
-            password=password
         )
 
         # Test batch notification
@@ -163,11 +210,6 @@ if __name__ == "__main__":
 
         send_batch_notification(
             signals=signals,
-            sender_email=sender_email,
-            receiver_email=receiver_email,
-            smtp_server=smtp_server,
-            login=login,
-            password=password
         )
     else:
         print("Email settings not completely configured in .env file")
