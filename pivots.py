@@ -1,95 +1,6 @@
 import MetaTrader5 as mt5
-import pandas as pd
 from datetime import datetime, timedelta
-
-
-def get_historical_ohlc(symbol, timeframe, lookback_periods=1):
-    """
-    Get historical OHLC data for the specified number of lookback periods.
-
-    Args:
-        symbol (str): The trading symbol
-        timeframe (str): "daily" or "weekly"
-        lookback_periods (int): Number of periods to look back
-
-    Returns:
-        list: List of dictionaries with OHLC data for each period
-    """
-    # Initialize MT5 if not already initialized
-    if not mt5.initialize():
-        print("Failed to initialize MT5")
-        return None
-
-    today = datetime.now().date()
-    results = []
-
-    if timeframe.lower() == "daily":
-        mt5_timeframe = mt5.TIMEFRAME_D1
-
-        # Adjust for weekends and holidays
-        for i in range(lookback_periods + 2):  # +2 to ensure we have enough data
-            # Start checking from the previous day
-            check_date = today - timedelta(days=i)
-            weekday = check_date.weekday()
-
-            # Skip weekends
-            if weekday >= 5:  # Saturday or Sunday
-                continue
-
-            # Try to get data for this date
-            start_time = datetime.combine(check_date, datetime.min.time())
-            end_time = datetime.combine(check_date, datetime.max.time())
-
-            rates = mt5.copy_rates_range(symbol, mt5_timeframe, start_time, end_time)
-
-            if rates is not None and len(rates) > 0:
-                rates_df = pd.DataFrame(rates)
-                last_bar = rates_df.iloc[-1]
-
-                results.append({
-                    "date": check_date,
-                    "high": last_bar['high'],
-                    "low": last_bar['low'],
-                    "close": last_bar['close']
-                })
-
-                if len(results) >= lookback_periods:
-                    break
-
-    elif timeframe.lower() == "weekly":
-        mt5_timeframe = mt5.TIMEFRAME_W1
-
-        # Use a more reliable approach for weekly data
-        # Get several weeks of data and then filter
-        current_time = datetime.now()
-        # Go back 8 weeks to ensure we have enough data
-        start_time = current_time - timedelta(days=56)  # 8 weeks
-
-        # Get all weekly bars
-        rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, 10)
-
-        if rates is not None and len(rates) > 0:
-            rates_df = pd.DataFrame(rates)
-            # Convert time to datetime
-            rates_df['time'] = pd.to_datetime(rates_df['time'], unit='s')
-
-            # Sort by time descending to get the most recent weeks first
-            rates_df = rates_df.sort_values('time', ascending=False)
-
-            # Take the required number of weeks
-            for i in range(min(lookback_periods, len(rates_df))):
-                if i < len(rates_df):
-                    bar = rates_df.iloc[i]
-                    week_date = bar['time'].date()
-
-                    results.append({
-                        "date": week_date,
-                        "high": bar['high'],
-                        "low": bar['low'],
-                        "close": bar['close']
-                    })
-
-    return results
+import market_utils
 
 
 def calculate_fibonacci_pivots(ohlc_data):
@@ -126,95 +37,161 @@ def calculate_fibonacci_pivots(ohlc_data):
     }
 
 
-def get_current_market_status(symbol):
+def check_pivot_signals(symbol, current_price, pivot_data, timeframe):
     """
-    Check if the market is currently open for the given symbol
+    Check for trading signals based on pivot points.
+
+    Args:
+        symbol (str): The trading symbol
+        current_price (float): Current price of the symbol
+        pivot_data (dict): Dictionary with pivot levels
+        timeframe (str): Timeframe of the pivot data (daily, weekly)
+
+    Returns:
+        list: List of signal dictionaries
     """
-    if not mt5.initialize():
-        print("Failed to initialize MT5")
-        return "Unknown"
+    signals = []
 
-    # Get symbol info
-    symbol_info = mt5.symbol_info(symbol)
-    if symbol_info is None:
-        return "Unknown"
+    # Extract pivot levels
+    levels = {
+        "R2": pivot_data.get("R2"),
+        "R1": pivot_data.get("R1"),
+        "P": pivot_data.get("P"),
+        "S1": pivot_data.get("S1"),
+        "S2": pivot_data.get("S2")
+    }
 
-    # Check if symbol is visible and trade is allowed
-    if not symbol_info.visible:
-        return "Not Visible"
+    # Check for price near pivot levels
+    for level_name, level_value in levels.items():
+        signal = market_utils.check_proximity_to_level(
+            current_price,
+            level_value,
+            level_name,
+            timeframe
+        )
+        if signal:
+            signals.append(signal)
 
-    # Check trading session status
-    if symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL:
-        return "Open"
-    elif symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_DISABLED:
-        return "Closed"
-    elif symbol_info.trade_mode == mt5.SYMBOL_TRADE_MODE_CLOSEONLY:
-        return "Close Only"
-    else:
-        return "Unknown"
+    return signals
 
 
-def main():
-    # Initialize MT5
-    if not mt5.initialize():
-        print("Failed to initialize MT5")
-        return
+def get_pivot_levels(symbol):
+    """
+    Get daily and weekly pivot levels for the current and previous periods.
 
-    # Get user input for symbol
-    symbol = input("Enter symbol (e.g., EURUSD): ")
+    Args:
+        symbol (str): The trading symbol
 
-    # Check market status
-    market_status = get_current_market_status(symbol)
-    print(f"Current market status for {symbol}: {market_status}")
-    print("Calculating pivot points using last available data...\n")
+    Returns:
+        tuple: (daily_pivots, weekly_pivots, all_signals)
+        - daily_pivots: dict with current and previous daily pivots
+        - weekly_pivots: dict with current and previous weekly pivots
+        - all_signals: list of all signals detected
+    """
+    # Get current price
+    current_price = market_utils.get_current_price(symbol)
+    all_signals = []
+
+    # Initialize result containers
+    daily_pivots = {
+        "current": None,
+        "previous": None
+    }
+
+    weekly_pivots = {
+        "current": None,
+        "previous": None
+    }
 
     # Get daily historical data (2 periods)
-    daily_data = get_historical_ohlc(symbol, "daily", 2)
+    daily_data = market_utils.get_historical_ohlc(symbol, "daily", 2)
 
     if daily_data and len(daily_data) >= 2:
         # Current daily pivots (based on previous day)
         current_daily_data = daily_data[0]
         current_daily_pivots = calculate_fibonacci_pivots(current_daily_data)
+        daily_pivots["current"] = {
+            "date": current_daily_data["date"],
+            "levels": current_daily_pivots
+        }
 
-        print(f"Current Daily Fibonacci Pivots for {symbol} (based on {current_daily_data['date']}):")
-        for level, value in current_daily_pivots.items():
-            print(f"{level}: {value:.5f}")
+        # Check for signals with current daily pivots
+        if current_price is not None:
+            current_daily_signals = check_pivot_signals(
+                symbol,
+                current_price,
+                current_daily_pivots,
+                f"daily (based on {current_daily_data['date']})"
+            )
+            all_signals.extend(current_daily_signals)
 
         # Previous daily pivots (based on day before previous day)
         previous_daily_data = daily_data[1]
         previous_daily_pivots = calculate_fibonacci_pivots(previous_daily_data)
+        daily_pivots["previous"] = {
+            "date": previous_daily_data["date"],
+            "levels": previous_daily_pivots
+        }
 
-        print(f"\nPrevious Daily Fibonacci Pivots for {symbol} (based on {previous_daily_data['date']}):")
-        for level, value in previous_daily_pivots.items():
-            print(f"{level}: {value:.5f}")
+        # Check for signals with previous daily pivots
+        if current_price is not None:
+            previous_daily_signals = check_pivot_signals(
+                symbol,
+                current_price,
+                previous_daily_pivots,
+                f"daily (based on {previous_daily_data['date']})"
+            )
+            all_signals.extend(previous_daily_signals)
     else:
-        print("Unable to get sufficient daily data for pivot calculations.")
+        print("Warning: Unable to calculate daily pivots. Insufficient historical data.")
 
     # Get weekly historical data (2 periods)
-    weekly_data = get_historical_ohlc(symbol, "weekly", 2)
+    weekly_data = market_utils.get_historical_ohlc(symbol, "weekly", 4)
 
     if weekly_data and len(weekly_data) >= 2:
-        # Current weekly pivots (based on previous week)
-        current_weekly_data = weekly_data[0]
+        # Current weekly pivots (based on most recent completed week)
+        current_weekly_data = weekly_data[1]
         current_weekly_pivots = calculate_fibonacci_pivots(current_weekly_data)
+        weekly_pivots["current"] = {
+            "date": current_weekly_data["date"],
+            "levels": current_weekly_pivots
+        }
 
-        print(f"\nCurrent Weekly Fibonacci Pivots for {symbol} (week ending {current_weekly_data['date']}):")
-        for level, value in current_weekly_pivots.items():
-            print(f"{level}: {value:.5f}")
+        # Check for signals with current weekly pivots
+        if current_price is not None:
+            current_weekly_signals = check_pivot_signals(
+                symbol,
+                current_price,
+                current_weekly_pivots,
+                f"weekly (completed week ending {current_weekly_data['date']})"
+            )
+            all_signals.extend(current_weekly_signals)
 
-        # Previous weekly pivots (based on week before previous week)
-        previous_weekly_data = weekly_data[1]
+        # Previous weekly pivots (based on week before the most recent completed week)
+        previous_weekly_data = weekly_data[2]
         previous_weekly_pivots = calculate_fibonacci_pivots(previous_weekly_data)
+        weekly_pivots["previous"] = {
+            "date": previous_weekly_data["date"],
+            "levels": previous_weekly_pivots
+        }
 
-        print(f"\nPrevious Weekly Fibonacci Pivots for {symbol} (week ending {previous_weekly_data['date']}):")
-        for level, value in previous_weekly_pivots.items():
-            print(f"{level}: {value:.5f}")
+        # Check for signals with previous weekly pivots
+        if current_price is not None:
+            previous_weekly_signals = check_pivot_signals(
+                symbol,
+                current_price,
+                previous_weekly_pivots,
+                f"weekly (completed week ending {previous_weekly_data['date']})"
+            )
+            all_signals.extend(previous_weekly_signals)
     else:
-        # Fallback method for weekly data using daily aggregation
-        print("\nAttempting alternative method for weekly data calculation...")
+        print("Warning: Unable to calculate weekly pivots. Insufficient historical data.")
+
+        # Try alternative method using daily data aggregation
+        print("Attempting alternative method for weekly data calculation...")
 
         # Get two weeks of daily data
-        daily_data_extended = get_historical_ohlc(symbol, "daily", 14)  # Get 14 days to cover ~2 weeks
+        daily_data_extended = market_utils.get_historical_ohlc(symbol, "daily", 14)  # Get 14 days to cover ~2 weeks
 
         if daily_data_extended and len(daily_data_extended) >= 5:
             # Group by week
@@ -234,13 +211,15 @@ def main():
                     weekly_groups[week_id] = []
                 weekly_groups[week_id].append(day)
 
-            # Calculate weekly OHLC
+            # Calculate weekly OHLC for completed weeks only
             manual_weekly_data = []
             for week_id, days in sorted(weekly_groups.items(), reverse=True):
-                if len(days) > 0:
+                if len(days) >= 3:  # Consider a week with at least 3 trading days as valid
                     week_high = max(day['high'] for day in days)
                     week_low = min(day['low'] for day in days)
-                    week_close = days[-1]['close']  # Last day's close
+                    # Sort days by date and use the most recent day's close
+                    sorted_days = sorted(days, key=lambda x: x['date'])
+                    week_close = sorted_days[-1]['close']
                     week_date = max(day['date'] for day in days)
 
                     manual_weekly_data.append({
@@ -250,7 +229,7 @@ def main():
                         'close': week_close
                     })
 
-            # Take the two most recent weeks
+            # Take the two most recent completed weeks
             if len(manual_weekly_data) >= 2:
                 current_weekly_data = manual_weekly_data[0]
                 previous_weekly_data = manual_weekly_data[1]
@@ -258,31 +237,78 @@ def main():
                 current_weekly_pivots = calculate_fibonacci_pivots(current_weekly_data)
                 previous_weekly_pivots = calculate_fibonacci_pivots(previous_weekly_data)
 
-                print(f"\nCurrent Weekly Fibonacci Pivots for {symbol} (week ending {current_weekly_data['date']}):")
-                for level, value in current_weekly_pivots.items():
-                    print(f"{level}: {value:.5f}")
+                weekly_pivots["current"] = {
+                    "date": current_weekly_data["date"],
+                    "levels": current_weekly_pivots,
+                    "note": "calculated from daily data"
+                }
 
-                print(f"\nPrevious Weekly Fibonacci Pivots for {symbol} (week ending {previous_weekly_data['date']}):")
-                for level, value in previous_weekly_pivots.items():
-                    print(f"{level}: {value:.5f}")
-            else:
-                print("Unable to calculate weekly pivots from daily data.")
-        else:
-            print("Unable to get sufficient weekly data for pivot calculations.")
+                weekly_pivots["previous"] = {
+                    "date": previous_weekly_data["date"],
+                    "levels": previous_weekly_pivots,
+                    "note": "calculated from daily data"
+                }
 
-    current_time = datetime.now()
-    today = current_time.date()
-    weekday = today.weekday()
+                # Check for signals with these pivots as well
+                if current_price is not None:
+                    current_weekly_signals = check_pivot_signals(
+                        symbol,
+                        current_price,
+                        current_weekly_pivots,
+                        f"weekly (aggregated from daily, ending {current_weekly_data['date']})"
+                    )
+                    all_signals.extend(current_weekly_signals)
 
-    if weekday >= 5:  # Weekend
-        days_until_market_opens = 7 - weekday  # Days until Monday
-        next_market_day = today + timedelta(days=days_until_market_opens)
-        print(
-            f"\nNote: Markets are currently closed for the weekend. Next trading day: Monday {next_market_day.strftime('%Y-%m-%d')}")
+                    previous_weekly_signals = check_pivot_signals(
+                        symbol,
+                        current_price,
+                        previous_weekly_pivots,
+                        f"weekly (aggregated from daily, ending {previous_weekly_data['date']})"
+                    )
+                    all_signals.extend(previous_weekly_signals)
 
-    # Shutdown MT5
-    mt5.shutdown()
+    return daily_pivots, weekly_pivots, all_signals
 
 
-if __name__ == "__main__":
-    main()
+def print_pivot_levels(symbol, daily_pivots, weekly_pivots):
+    """
+    Print the calculated pivot levels in a formatted way.
+
+    Args:
+        symbol (str): The trading symbol
+        daily_pivots (dict): Daily pivot data
+        weekly_pivots (dict): Weekly pivot data
+    """
+    # Print daily pivots
+    if daily_pivots["current"]:
+        current_date = daily_pivots["current"]["date"]
+        current_levels = daily_pivots["current"]["levels"]
+
+        print(f"\nCurrent Daily Fibonacci Pivots for {symbol} (based on {current_date}):")
+        for level, value in current_levels.items():
+            print(f"{level}: {value:.5f}")
+
+    if daily_pivots["previous"]:
+        previous_date = daily_pivots["previous"]["date"]
+        previous_levels = daily_pivots["previous"]["levels"]
+
+        print(f"\nPrevious Daily Fibonacci Pivots for {symbol} (based on {previous_date}):")
+        for level, value in previous_levels.items():
+            print(f"{level}: {value:.5f}")
+
+    # Print weekly pivots
+    if weekly_pivots["current"]:
+        current_date = weekly_pivots["current"]["date"]
+        current_levels = weekly_pivots["current"]["levels"]
+
+        print(f"\nCurrent Weekly Fibonacci Pivots for {symbol} (week ending {current_date}):")
+        for level, value in current_levels.items():
+            print(f"{level}: {value:.5f}")
+
+    if weekly_pivots["previous"]:
+        previous_date = weekly_pivots["previous"]["date"]
+        previous_levels = weekly_pivots["previous"]["levels"]
+
+        print(f"\nPrevious Weekly Fibonacci Pivots for {symbol} (week ending {previous_date}):")
+        for level, value in previous_levels.items():
+            print(f"{level}: {value:.5f}")
