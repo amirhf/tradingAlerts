@@ -40,7 +40,7 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60, send_notific
     plt.ion()
     plt.show(block=False)
 
-    # Get price levels (daily and weekly)
+    # Get price levels (daily, weekly, pivot, and asian session)
     price_levels = get_price_levels(symbol)
     if price_levels:
         print(f"Price levels for {symbol}:")
@@ -170,7 +170,7 @@ def update_chart(fig, price_ax, title, df, symbol, digits, price_levels):
     format_axes(price_ax, digits)
 
     # Apply tight layout and refresh
-    #    plt.tight_layout()
+    # plt.tight_layout()
     plt.subplots_adjust(top=0.90)  # More space for title
     fig.canvas.draw()
     fig.canvas.flush_events()
@@ -178,6 +178,7 @@ def update_chart(fig, price_ax, title, df, symbol, digits, price_levels):
 def draw_price_levels(price_ax, price_levels, x_min, digits):
     """Draw price levels on the chart"""
     level_styles = {
+        # Standard levels
         'today_open': {'color': 'yellow', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8, 'label': 'Daily Open',
                        'valign': 'bottom'},
         'yesterday_open': {'color': 'orange', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8,
@@ -189,8 +190,47 @@ def draw_price_levels(price_ax, price_levels, x_min, digits):
         'prev_week_high': {'color': 'cyan', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
                            'label': 'Prev Week High', 'valign': 'bottom'},
         'prev_week_low': {'color': 'magenta', 'linestyle': '-.', 'linewidth': 2.0, 'alpha': 0.8,
-                          'label': 'Prev Week Low', 'valign': 'top'}
+                          'label': 'Prev Week Low', 'valign': 'top'},
+
+        # Daily Pivot levels
+        'daily_pivot_P': {'color': 'white', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8,
+                          'label': 'Daily Pivot', 'valign': 'bottom'},
+        'daily_pivot_R1': {'color': 'lightgreen', 'linestyle': '-', 'linewidth': 1.0, 'alpha': 0.8,
+                           'label': 'Daily R1', 'valign': 'bottom'},
+        'daily_pivot_R2': {'color': 'lightgreen', 'linestyle': '-', 'linewidth': 1.0, 'alpha': 0.8,
+                           'label': 'Daily R2', 'valign': 'bottom'},
+        'daily_pivot_S1': {'color': 'lightcoral', 'linestyle': '-', 'linewidth': 1.0, 'alpha': 0.8,
+                           'label': 'Daily S1', 'valign': 'top'},
+        'daily_pivot_S2': {'color': 'lightcoral', 'linestyle': '-', 'linewidth': 1.0, 'alpha': 0.8,
+                           'label': 'Daily S2', 'valign': 'top'},
+
+        # Weekly Pivot levels
+        'weekly_pivot_P': {'color': 'white', 'linestyle': '--', 'linewidth': 1.5, 'alpha': 0.8,
+                           'label': 'Weekly Pivot', 'valign': 'bottom'},
+        'weekly_pivot_R1': {'color': 'lightgreen', 'linestyle': '--', 'linewidth': 1.0, 'alpha': 0.8,
+                            'label': 'Weekly R1', 'valign': 'bottom'},
+        'weekly_pivot_R2': {'color': 'lightgreen', 'linestyle': '--', 'linewidth': 1.0, 'alpha': 0.8,
+                            'label': 'Weekly R2', 'valign': 'bottom'},
+        'weekly_pivot_S1': {'color': 'lightcoral', 'linestyle': '--', 'linewidth': 1.0, 'alpha': 0.8,
+                            'label': 'Weekly S1', 'valign': 'top'},
+        'weekly_pivot_S2': {'color': 'lightcoral', 'linestyle': '--', 'linewidth': 1.0, 'alpha': 0.8,
+                            'label': 'Weekly S2', 'valign': 'top'},
+
+        # Asian session levels
+        'asian_high': {'color': 'skyblue', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8,
+                       'label': 'Asian High', 'valign': 'bottom'},
+        'asian_low': {'color': 'skyblue', 'linestyle': '-', 'linewidth': 1.5, 'alpha': 0.8,
+                      'label': 'Asian Low', 'valign': 'top'},
+        'asian_mid': {'color': 'skyblue', 'linestyle': '--', 'linewidth': 1.0, 'alpha': 0.8,
+                      'label': 'Asian Mid', 'valign': 'middle'},
+        'prev_asian_high': {'color': 'steelblue', 'linestyle': '-', 'linewidth': 1.0, 'alpha': 0.7,
+                            'label': 'Prev Asian High', 'valign': 'bottom'},
+        'prev_asian_low': {'color': 'steelblue', 'linestyle': '-', 'linewidth': 1.0, 'alpha': 0.7,
+                           'label': 'Prev Asian Low', 'valign': 'top'},
+        'prev_asian_mid': {'color': 'steelblue', 'linestyle': '--', 'linewidth': 1.0, 'alpha': 0.7,
+                           'label': 'Prev Asian Mid', 'valign': 'middle'}
     }
+
     levels_to_draw = []
     for level_name, style in level_styles.items():
         if level_name in price_levels:
@@ -199,24 +239,33 @@ def draw_price_levels(price_ax, price_levels, x_min, digits):
                 'value': price_levels[level_name],
                 'style': style
             })
+
+    # Sort levels by value (highest to lowest) to help with label placement
     levels_to_draw.sort(key=lambda x: x['value'], reverse=True)
+
+    # Ensure labels don't overlap too much
     min_gap_pct = 0.01
     price_range = price_ax.get_ylim()[1] - price_ax.get_ylim()[0]
     min_gap = price_range * min_gap_pct
+
     for i in range(1, len(levels_to_draw)):
         curr = levels_to_draw[i]
         prev = levels_to_draw[i - 1]
         if prev['value'] - curr['value'] < min_gap:
             if prev['style']['valign'] == curr['style']['valign']:
                 curr['style']['valign'] = 'top' if prev['style']['valign'] == 'bottom' else 'bottom'
+
+    # Draw the levels
     for level_info in levels_to_draw:
         level_name = level_info['name']
         level_value = level_info['value']
         style = level_info['style']
+
         price_ax.axhline(y=level_value, color=style['color'],
                          linestyle=style['linestyle'],
                          linewidth=style['linewidth'],
                          alpha=style['alpha'])
+
         formatted_price = f"{level_value:.{digits}f}"
         price_ax.text(x_min, level_value, f"{style['label']}: {formatted_price}",
                       color=style['color'], fontsize=9,
@@ -285,22 +334,27 @@ def set_axis_limits(price_ax, df, dates, price_levels):
     """Calculate and set axis limits"""
     price_min = df['Low'].min()
     price_max = df['High'].max()
+
     if price_levels:
-        # Check if key levels exist before adding them to level_values
-        level_values = []
-        for key in ['today_open', 'yesterday_high', 'yesterday_low', 'yesterday_open']:
-            if key in price_levels:
-                level_values.append(price_levels[key])
+        # Include all price levels in the axis limits calculation
+        for level_name, level_value in price_levels.items():
+            # Skip if the level is None
+            if level_value is not None:
+                price_min = min(price_min, level_value)
+                price_max = max(price_max, level_value)
 
-        if 'prev_week_high' in price_levels:
-            level_values.append(price_levels['prev_week_high'])
-        if 'prev_week_low' in price_levels:
-            level_values.append(price_levels['prev_week_low'])
+        # Add a small margin to ensure all levels are visible
+        range_size = price_max - price_min
+        price_min -= range_size * 0.02  # 2% margin at bottom
+        price_max += range_size * 0.02  # 2% margin at top
 
-        # Include level values in the axis limits calculation
-        for level_value in level_values:
-            price_min = min(price_min, level_value)
-            price_max = max(price_max, level_value)
+    # Set y-axis limits
+    price_ax.set_ylim(price_min, price_max)
+
+    # Set x-axis limits
+    if len(dates) > 0:
+        price_ax.set_xlim(dates[0], dates[-1])
+
 
 def format_axes(price_ax, digits):
     """Format chart axes"""

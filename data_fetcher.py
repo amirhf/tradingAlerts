@@ -4,6 +4,9 @@ Data fetching functions for MT5 Chart Application
 import MetaTrader5 as mt5
 import pandas as pd
 from datetime import datetime, timedelta, time
+# Import the pivot and Asian session calculations
+from pivots import calculate_fibonacci_pivots, get_pivot_levels
+from asian_session import get_asian_session_range
 
 def get_10min_data(symbol, num_bars=100):
     """
@@ -47,14 +50,13 @@ def get_10min_data(symbol, num_bars=100):
 
     # Sort by time
     df.sort_index(inplace=True)
-    #print(f"Retrieved {len(df)} 10-minute bars for {symbol}")
 
     return df
 
 
 def get_price_levels(symbol):
     """
-    Get important price levels including daily and weekly references
+    Get important price levels including daily, weekly, pivot points, and Asian session ranges
 
     Args:
         symbol (str): The trading symbol to fetch data for
@@ -108,26 +110,60 @@ def get_price_levels(symbol):
         prev_week_high = prev_week_data['high']
         prev_week_low = prev_week_data['low']
 
-    # If we have at least 2 bars
+    # Initialize the price levels dictionary
+    price_levels = {}
+
+    # If we have at least 2 bars, add the standard levels
     if len(daily_df) >= 2:
         today_bar = daily_df.iloc[-1]
         yesterday_bar = daily_df.iloc[-2]
 
-        # Return all relevant price levels
-        price_levels = {
+        # Add standard price levels
+        price_levels.update({
             'today_open': today_bar['open'],
             'yesterday_open': yesterday_bar['open'],
             'yesterday_high': yesterday_bar['high'],
             'yesterday_low': yesterday_bar['low'],
             'yesterday_close': yesterday_bar['close']
-        }
+        })
 
         # Add weekly levels if available
         if prev_week_high is not None:
             price_levels['prev_week_high'] = prev_week_high
             price_levels['prev_week_low'] = prev_week_low
-
-        return price_levels
     else:
-        print("Not enough daily bars to determine price levels")
-        return None
+        print("Not enough daily bars to determine standard price levels")
+        return price_levels  # Return empty dict if we can't get standard levels
+
+    # Add pivot levels
+    try:
+        # Get pivot levels for daily and weekly timeframes
+        daily_pivots, weekly_pivots, _ = get_pivot_levels(symbol)
+
+        # Add daily pivot levels if available
+        if daily_pivots.get("current") and daily_pivots["current"].get("levels"):
+            daily_levels = daily_pivots["current"]["levels"]
+            for level_name, level_value in daily_levels.items():
+                price_levels[f'daily_pivot_{level_name}'] = level_value
+
+        # Add weekly pivot levels if available
+        if weekly_pivots.get("current") and weekly_pivots["current"].get("levels"):
+            weekly_levels = weekly_pivots["current"]["levels"]
+            for level_name, level_value in weekly_levels.items():
+                price_levels[f'weekly_pivot_{level_name}'] = level_value
+    except Exception as e:
+        print(f"Error adding pivot levels: {e}")
+
+    # Add Asian session ranges
+    try:
+        # Current day Asian session
+        current_asian = get_asian_session_range(symbol, 0)
+        if current_asian:
+            price_levels['asian_high'] = current_asian['high']
+            price_levels['asian_low'] = current_asian['low']
+            price_levels['asian_mid'] = current_asian['mid']
+
+    except Exception as e:
+        print(f"Error adding Asian session levels: {e}")
+
+    return price_levels
