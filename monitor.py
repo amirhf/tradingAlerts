@@ -80,11 +80,12 @@ def monitor_symbol(symbol, symbol_data, stop_event):
                                 'type': candle_type,
                                 'levels': touch_levels
                             }
-
+                            true_range= max(closed_candle['High'],previous_candle['High'])-min(closed_candle['Low'],previous_candle['Low'])
+                            stop_pips = true_range*10000
                             # Send notification
                             send_notification(
                                 subject=f"{symbol}: {candle_type.upper()} Pattern Detected",
-                                body=f"Symbol: {symbol}\nTime: {last_candle_time}\nPattern: {candle_type}\nTouched levels: {touch_levels}\n\nPrice: {closed_candle['Close']}",
+                                body=f"Symbol: {symbol}\nTime: {last_candle_time}\nPattern: {candle_type}\nTouched levels: {touch_levels}\n\nPrice: {closed_candle['Close']} SP:{stop_pips}",
                             )
 
                     # Update the last candle time

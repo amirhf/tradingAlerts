@@ -25,7 +25,7 @@ def detect_reversal_pattern(df, i):
     # Bullish failure: low < prev low but close > prev high
     is_bullish_reversal = low < prev_low and high > prev_high and close>open
 
-    large_body = abs(close-open) > 0.75*(high-low)
+    large_body = abs(close-open) >= 0.5*(high-low)
     is_bullish_ifc = close>prev_high and close>float(df['High'].iloc[i-2]) and large_body
     is_bearish_ifc = close<prev_low and close<float(df['Low'].iloc[i-2]) and large_body
 
@@ -48,7 +48,7 @@ def analyse_candle(closed_candle, previous_candle, previous2_candle, price_level
     bull_engulfing = low0 < low1 and high0>high1 and close0>open0
     bear_engulfing = high0 > high1 and low0 < low1 and close0<open0
 
-    large_body = abs(close0-open0) > 0.75*(high0-low0)
+    large_body = abs(close0-open0) >= 0.5*(high0-low0)
     bull_ifc = close0>high1 and close0>high2 and large_body
     bear_ifc = close0<low1 and close0<low2 and large_body
 
