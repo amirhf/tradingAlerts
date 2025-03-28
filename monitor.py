@@ -33,48 +33,116 @@ def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, ac
     # Get symbol info
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
+        print(f"Error: Unable to get symbol info for {symbol}")
         return 0, 0, 0
+
+    # Print symbol properties for debugging
+    print(f"Symbol: {symbol}")
+    print(f"Point: {symbol_info.point}")
+    print(f"Contract size: {symbol_info.trade_contract_size}")
+    print(f"Tick size: {symbol_info.trade_tick_size}")
+    print(f"Tick value: {symbol_info.trade_tick_value}")
 
     # Get point value (minimum price change)
     point = symbol_info.point
 
     # Convert price-based stop to points
-    stop_points = math.ceil(stop_distance_price / point)
+    stop_points = int(stop_distance_price / point)
+    print(f"Stop distance: {stop_distance_price:.5f} price = {stop_points} points")
 
     # Calculate risk amount in account currency
     risk_amount = account_size * (risk_percentage / 100)
+    print(f"Risk amount: ${risk_amount:.2f}")
 
     # Get contract specifications
     contract_size = symbol_info.trade_contract_size  # Standard lot size
 
-    # Calculate tick value (value of minimum price change)
-    tick_value = symbol_info.trade_tick_value
-    if tick_value == 0:  # Safeguard against division by zero
-        tick_value = point
+    # For forex pairs, we need to handle the different quote currencies
+    # The symbol base currency is the first 3 letters (e.g., EUR in EURUSD)
+    # The quote currency is the last 3 letters (e.g., USD in EURUSD)
+    base_currency = symbol[:3] if len(symbol) >= 6 else ""
+    quote_currency = symbol[3:6] if len(symbol) >= 6 else ""
+    account_currency = "USD"  # Assuming USD account
 
-    # Calculate point value in account currency
-    point_value = tick_value / symbol_info.trade_tick_size
+    # Calculate pip value (point value in account currency)
+    # For major forex pairs, we need to consider the quote currency
+    pip_value = 0
 
-    # Calculate cost of one point per lot
-    point_cost_per_lot = point_value * contract_size
+    if quote_currency == account_currency:
+        # Direct quote (e.g., EURUSD for USD account)
+        pip_value = contract_size * point
+        print(f"Direct quote: 1 point = ${pip_value:.5f}")
+    elif base_currency == account_currency:
+        # Indirect quote (e.g., USDCHF for USD account)
+        # Need to convert from quote currency to account currency
+        current_price = (symbol_info.bid + symbol_info.ask) / 2
+        pip_value = (contract_size * point) / current_price
+        print(f"Indirect quote: 1 point = ${pip_value:.5f} at price {current_price:.5f}")
+    else:
+        # Cross rates (e.g., EURGBP for USD account)
+        # We need to find conversion rate to USD
+        # This is simplified - in production you might need to get actual conversion rates
+        try:
+            # Try to get conversion rate via USD pairs
+            conversion_symbol = f"{quote_currency}{account_currency}"
+            conversion_info = mt5.symbol_info(conversion_symbol)
+
+            if conversion_info is not None:
+                # Convert using the quote currency to USD rate
+                conversion_rate = (conversion_info.bid + conversion_info.ask) / 2
+                pip_value = contract_size * point * conversion_rate
+                print(f"Cross rate: 1 point = ${pip_value:.5f} via {conversion_symbol}")
+            else:
+                # Try reverse conversion
+                conversion_symbol = f"{account_currency}{quote_currency}"
+                conversion_info = mt5.symbol_info(conversion_symbol)
+
+                if conversion_info is not None:
+                    conversion_rate = (conversion_info.bid + conversion_info.ask) / 2
+                    pip_value = (contract_size * point) / conversion_rate
+                    print(f"Cross rate (reverse): 1 point = ${pip_value:.5f} via {conversion_symbol}")
+                else:
+                    # Fallback to estimation
+                    pip_value = contract_size * point * 1.0  # Rough estimate
+                    print(f"Warning: Couldn't determine accurate pip value, using estimate")
+        except Exception as e:
+            print(f"Error in currency conversion: {e}")
+            pip_value = contract_size * point  # Rough fallback
+
+    # Special handling for gold and other commodities
+    if symbol in ["XAUUSD", "GOLD"]:
+        # For gold, each point is usually $0.01 per oz, and contract size is 100 oz
+        pip_value = contract_size * 0.01
+        print(f"Gold: 1 point = ${pip_value:.2f}")
+    elif symbol in ["XAGUSD", "SILVER"]:
+        # For silver, each point is usually $0.01 per oz, and contract size is 5000 oz
+        pip_value = contract_size * 0.01
+        print(f"Silver: 1 point = ${pip_value:.2f}")
 
     # Calculate position size in lots
-    if stop_points > 0 and point_cost_per_lot > 0:
-        position_size = risk_amount / (stop_points * point_cost_per_lot)
+    if stop_points > 0 and pip_value > 0:
+        # Risk per position = stop_points * pip_value * position_size_in_lots
+        # So position_size_in_lots = risk_amount / (stop_points * pip_value)
+        position_size = risk_amount / (stop_points * pip_value)
+        print(
+            f"Position size calculation: {risk_amount:.2f} / ({stop_points} * {pip_value:.5f}) = {position_size:.2f} lots")
     else:
         position_size = 0
+        print("Warning: Could not calculate position size (zero stop points or pip value)")
 
     # Round to nearest valid lot step
     volume_step = symbol_info.volume_step
     if volume_step > 0:
-        position_size = round(position_size / volume_step) * volume_step
+        position_size = math.floor(position_size / volume_step) * volume_step
+        print(f"Rounded down to volume step {volume_step}: {position_size:.2f} lots")
 
     # Ensure position size is within allowed limits
     position_size = max(position_size, symbol_info.volume_min)
     position_size = min(position_size, symbol_info.volume_max)
+    print(
+        f"Final position size: {position_size:.2f} lots (min: {symbol_info.volume_min}, max: {symbol_info.volume_max})")
 
     return position_size, stop_points, risk_amount
-
 
 def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account_size=100000):
     """
@@ -282,7 +350,7 @@ if __name__ == "__main__":
         exit()
 
     try:
-        default_symbols = "EURUSD,GBPUSD,XAUUSD,USDCHF"
+        default_symbols = "EURUSD,GBPUSD,USDCHF,USDJPY,XAUUSD,NZDUSD"
         symbols_input = input(f"Enter symbols to monitor (comma-separated, default: {default_symbols}): ") or default_symbols
         symbols = [s.strip().upper() for s in symbols_input.split(",")]
 

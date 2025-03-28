@@ -16,29 +16,38 @@ _cached_weekly_levels = {}
 _cached_pivot_levels = {}
 _cached_asian_levels = {}
 
+
 def get_mt5_server_time():
     """
     Get the current time from the MT5 server to ensure timezone alignment
 
     Returns:
-        datetime: Current MT5 server time
+        datetime: Current MT5 server time or local time if server time is unavailable
     """
-    # Get MT5 terminal info
-    terminal_info = mt5.terminal_info()
-    if terminal_info is None:
-        print("Failed to get MT5 terminal info, falling back to local time")
+    try:
+        # Method 1: Try to get time from a recent tick for a major symbol
+        last_tick = mt5.symbol_info_tick("EURUSD")
+        if last_tick is not None and hasattr(last_tick, 'time'):
+            # Convert from timestamp to datetime
+            server_time = datetime.fromtimestamp(last_tick.time)
+            print(f"Using MT5 tick time: {server_time}")
+            return server_time
+
+        # Method 2: Try to get time from recent candle data
+        candles = mt5.copy_rates_from_pos("EURUSD", mt5.TIMEFRAME_M1, 0, 1)
+        if candles is not None and len(candles) > 0:
+            # Convert from timestamp to datetime
+            server_time = datetime.fromtimestamp(candles[0]['time'])
+            print(f"Using MT5 candle time: {server_time}")
+            return server_time
+
+        # Method 3: Use local time, but print a warning
+        print("Warning: Could not determine MT5 server time, using local time")
         return datetime.now()
 
-    # Get the timezone offset in seconds
-    timezone_offset = terminal_info.timezone
-
-    # Get the GMT time
-    gmt_time = datetime.utcnow()
-
-    # Apply the timezone offset to get server time
-    server_time = gmt_time + timedelta(seconds=timezone_offset)
-
-    return server_time
+    except Exception as e:
+        print(f"Error getting MT5 server time: {e}, falling back to local time")
+        return datetime.now()
 
 def get_10min_data(symbol, num_bars=100):
     """
@@ -230,43 +239,24 @@ def is_asian_session_complete():
     Returns:
         bool: True if the Asian session is complete, False otherwise
     """
-    # Get current time in server time
-    server_time = get_mt5_server_time()
+    # Get current time (either from MT5 or local)
+    current_time = get_mt5_server_time()
 
-    # Convert to NY time (EST/EDT) - MT5 times are in broker server time
-    # We need to check market conventions, not just timezone math
-    # For forex, Asian session is considered over at 2AM New York time
+    # Try to determine if Asian session is complete
+    # For most forex brokers, this would be after their 7-9 AM time
+    # This is approximate and may need adjustment based on broker
 
-    # Get actual market-relevant time information from MT5 (if available)
-    symbol_info = mt5.symbol_info("EURUSD")  # Use a major forex pair as reference
-    if symbol_info is not None and hasattr(symbol_info, 'time'):
-        # Some MT5 implementations provide trade server time, which can be used as reference
-        # But we still need to adjust for the targeted NY time
-        try:
-            # Check if current trading session includes New York
-            sessions = symbol_info.session_deals
-            # This is complex; for simplicity we'll use a time-based approach
+    # Approach 1: Check if we're past typical Asian session hours in broker time
+    # Most brokers are on GMT+2 or GMT+3, and Asian session ends around 7-9 AM their time
+    broker_hour = current_time.hour
 
-            # Convert broker time to NY (EST/EDT) time estimate
-            # This is approximate - we need to know broker's timezone to be exact
-            # For major brokers using GMT+2/GMT+3 during summer/winter:
-            if server_time.hour < 7:  # Before 7AM server time is likely before 2AM NY
-                return False
-            else:
-                return True
-
-        except AttributeError:
-            # If we can't get session info, use a simplified approach
-            pass
-
-    # Simplified fallback approach - assume server is on GMT+2 (common for forex brokers)
-    # and convert to NY time (GMT-4/GMT-5)
-    # This has a 6-7 hour difference depending on DST
-    est_hour = (server_time.hour - 6) % 24  # Rough estimate, 6 hours difference to NY
-
-    # Asian session ends at 02:00 NY time
-    return est_hour >= 2
-
+    # Rule of thumb: After 7 AM broker time, Asian session is typically complete
+    if broker_hour >= 7:
+        print(f"Asian session marked complete: Current hour in broker time is {broker_hour}")
+        return True
+    else:
+        print(f"Asian session not complete: Current hour in broker time is {broker_hour}")
+        return False
 
 def get_price_levels(symbol):
     """
