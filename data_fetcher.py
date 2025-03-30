@@ -8,15 +8,42 @@ from datetime import datetime, timedelta, time, date
 from pivots import calculate_fibonacci_pivots, get_pivot_levels
 from asian_session import get_asian_session_range
 import math
+import pytz
 
 # Global variables to track when levels were last updated
-_last_daily_update_date = None
-_last_weekly_update_date = None
+_last_daily_candle_time = None
+_last_weekly_candle_time = None
 _cached_daily_levels = {}
 _cached_weekly_levels = {}
 _cached_pivot_levels = {}
 _cached_asian_levels = {}
 _asian_session_status = {}
+
+def is_after_2am_est():
+    """
+    Check if the current time is after 2:00 AM EST (Eastern Standard Time)
+    This is specifically for determining Asian session completion
+
+    Returns:
+        bool: True if current time is after 2:00 AM EST, False otherwise
+    """
+    # Get current local time
+    local_time = datetime.now()
+
+    # Define EST timezone (UTC-5)
+    est = pytz.timezone('US/Eastern')
+
+    # Convert local time to EST
+    local_time_aware = pytz.timezone('UTC').localize(local_time).astimezone(pytz.utc)
+    est_time = local_time_aware.astimezone(est)
+
+    # Check if time is after 2 AM EST
+    is_after_2am = est_time.hour >= 2
+
+    print(f"Current EST time: {est_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Is after 2 AM EST: {is_after_2am}")
+
+    return is_after_2am
 
 def get_mt5_server_time():
     """
@@ -47,7 +74,6 @@ def get_mt5_server_time():
     except Exception as e:
         print(f"Error getting MT5 server time: {e}, falling back to local time")
         return datetime.now()
-
 
 def get_10min_data(symbol, num_bars=100):
     """
@@ -138,7 +164,6 @@ def get_10min_data(symbol, num_bars=100):
 
     return df
 
-
 def should_update_daily_levels(symbol):
     """
     Check if daily levels should be updated
@@ -149,20 +174,36 @@ def should_update_daily_levels(symbol):
     Returns:
         bool: True if levels should be updated, False otherwise
     """
-    global _last_daily_update_date
+    global _last_daily_candle_time
 
-    # Get current server time from MT5
-    server_time = get_mt5_server_time()
-    current_date = server_time.date()
+    # Fetch the latest daily candles
+    try:
+        # Get today and yesterday's daily candles (we need at least 2)
+        daily_bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 3)
 
-    # Always update if we haven't updated today
-    if _last_daily_update_date is None or _last_daily_update_date < current_date:
-        print(f"Daily levels update check: New day detected ({current_date} vs last update {_last_daily_update_date})")
-        _last_daily_update_date = current_date
-        return True
+        if daily_bars is None or len(daily_bars) < 2:
+            print(f"Not enough daily candles for {symbol}, can't determine if update needed")
+            return False
 
-    return False
+        # Convert to DataFrame
+        daily_df = pd.DataFrame(daily_bars)
+        daily_df['time'] = pd.to_datetime(daily_df['time'], unit='s')
+        daily_df = daily_df.sort_values('time', ascending=False)
 
+        # Get the time of the most recent daily candle
+        current_daily_candle_time = daily_df.iloc[0]['time']
+
+        # If this is our first check or the newest candle time is different from our last check
+        # it means a new daily candle has been formed in MT5's time
+        if _last_daily_candle_time is None or current_daily_candle_time > _last_daily_candle_time:
+            print(f"New daily candle detected: {current_daily_candle_time} vs last: {_last_daily_candle_time}")
+            _last_daily_candle_time = current_daily_candle_time
+            return True
+
+        return False
+    except Exception as e:
+        print(f"Error checking daily candle update: {e}")
+        return False
 
 def should_update_weekly_levels(symbol):
     """
@@ -174,23 +215,36 @@ def should_update_weekly_levels(symbol):
     Returns:
         bool: True if levels should be updated, False otherwise
     """
-    global _last_weekly_update_date
+    global _last_weekly_candle_time
 
-    # Get current server time from MT5
-    server_time = get_mt5_server_time()
-    current_date = server_time.date()
+    # Fetch the latest weekly candles
+    try:
+        # Get the latest weekly candles (we need at least 2)
+        weekly_bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_W1, 0, 3)
 
-    # Get current ISO week
-    current_week = current_date.isocalendar()[1]
+        if weekly_bars is None or len(weekly_bars) < 2:
+            print(f"Not enough weekly candles for {symbol}, can't determine if update needed")
+            return False
 
-    # Always update if we haven't updated this week
-    if _last_weekly_update_date is None or _last_weekly_update_date.isocalendar()[1] < current_week:
-        print(f"Weekly levels update check: New week detected (week {current_week} vs last update week {_last_weekly_update_date.isocalendar()[1] if _last_weekly_update_date else None})")
-        _last_weekly_update_date = current_date
-        return True
+        # Convert to DataFrame
+        weekly_df = pd.DataFrame(weekly_bars)
+        weekly_df['time'] = pd.to_datetime(weekly_df['time'], unit='s')
+        weekly_df = weekly_df.sort_values('time', ascending=False)
 
-    return False
+        # Get the time of the most recent weekly candle
+        current_weekly_candle_time = weekly_df.iloc[0]['time']
 
+        # If this is our first check or the newest candle time is different from our last check
+        # it means a new weekly candle has been formed in MT5's time
+        if _last_weekly_candle_time is None or current_weekly_candle_time > _last_weekly_candle_time:
+            print(f"New weekly candle detected: {current_weekly_candle_time} vs last: {_last_weekly_candle_time}")
+            _last_weekly_candle_time = current_weekly_candle_time
+            return True
+
+        return False
+    except Exception as e:
+        print(f"Error checking weekly candle update: {e}")
+        return False
 
 def is_asian_session_complete():
     """
@@ -199,50 +253,13 @@ def is_asian_session_complete():
     Returns:
         bool: True if the Asian session is complete, False otherwise
     """
-    global _asian_session_status
-
-    # Get current time
-    current_time = get_mt5_server_time()
-    current_date = current_time.date()
-
-    # If we've already checked today and confirmed Asian session is complete, return cached result
-    if current_date in _asian_session_status and _asian_session_status[current_date]:
-        return True
-
-    # Check if we're likely past Asian session hours
-    # Most brokers show 7-9 AM in their time when Asian session ends
-    # This corresponds to ~2AM EST (rough approximation)
-
-    # Get the hour in broker time
-    broker_hour = current_time.hour
-
-    # For most brokers, Asian session is complete after 7 AM broker time
-    is_complete = broker_hour >= 7
-
-    # Update our cache
-    _asian_session_status[current_date] = is_complete
-
-    # Cleanup old dates from cache
-    for old_date in list(_asian_session_status.keys()):
-        if old_date < current_date:
-            del _asian_session_status[old_date]
-
-    return is_complete
-
+    # Simply check if current time is after 2 AM EST
+    return is_after_2am_est()
 
 def fetch_daily_candles(symbol, days_back=10):
     """Fetch daily candles for the symbol"""
-    server_time = get_mt5_server_time()
-    current_date = server_time.date()
-    days_ago = current_date - timedelta(days=days_back)
-
     # Get daily bars
-    daily_bars = mt5.copy_rates_range(
-        symbol,
-        mt5.TIMEFRAME_D1,
-        datetime.combine(days_ago, time(0)),
-        server_time
-    )
+    daily_bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, days_back)
 
     if daily_bars is None or len(daily_bars) == 0:
         print(f"Failed to retrieve daily data for {symbol}")
@@ -256,20 +273,28 @@ def fetch_daily_candles(symbol, days_back=10):
 
     return daily_df
 
-
 def update_daily_levels(symbol):
     """Update daily levels for the symbol"""
     global _cached_daily_levels
 
     try:
-        daily_df = fetch_daily_candles(symbol)
-        if daily_df is None or len(daily_df) < 2:
+        # Get the daily candles (most recent first)
+        daily_bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 3)
+
+        if daily_bars is None or len(daily_bars) < 2:
             print(f"Not enough daily bars for {symbol}")
             return {}
 
+        # Convert to DataFrame
+        daily_df = pd.DataFrame(daily_bars)
+        daily_df['time'] = pd.to_datetime(daily_df['time'], unit='s')
+
+        # Sort by time (most recent first)
+        daily_df = daily_df.sort_values('time', ascending=False)
+
         # Today and yesterday bars
-        today_bar = daily_df.iloc[-1]
-        yesterday_bar = daily_df.iloc[-2]
+        today_bar = daily_df.iloc[0]
+        yesterday_bar = daily_df.iloc[1]
 
         # Update daily levels
         daily_levels = {
@@ -290,14 +315,13 @@ def update_daily_levels(symbol):
         print(f"Error updating daily levels for {symbol}: {e}")
         return {}
 
-
 def update_asian_levels(symbol):
     """Update Asian session levels for the symbol"""
     global _cached_asian_levels
 
     try:
         # Get current date
-        current_date = get_mt5_server_time().date()
+        current_date = datetime.now().date()
 
         # Check for Asian session completion
         if is_asian_session_complete():
@@ -328,6 +352,114 @@ def update_asian_levels(symbol):
         return {}
 
 
+def update_all_levels(symbol):
+    """
+    Update all levels (daily, weekly, pivot) for the symbol using consistent data
+
+    Args:
+        symbol (str): Trading symbol to update levels for
+
+    Returns:
+        dict: Combined dictionary of all updated levels
+    """
+    all_levels = {}
+
+    try:
+        # 1. Get daily candles - get enough for both daily levels and pivot calculations
+        daily_bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_D1, 0, 5)
+
+        if daily_bars is None or len(daily_bars) < 3:
+            print(f"Not enough daily bars for {symbol} to calculate levels")
+            return all_levels
+
+        # Convert to DataFrame
+        daily_df = pd.DataFrame(daily_bars)
+        daily_df['time'] = pd.to_datetime(daily_df['time'], unit='s')
+        daily_df = daily_df.sort_values('time', ascending=False)
+
+        # 2. Extract today and yesterday's data for daily levels
+        today_bar = daily_df.iloc[0]  # Most recent candle
+        yesterday_bar = daily_df.iloc[1]  # Second most recent candle
+
+        # Calculate daily levels
+        daily_levels = {
+            'today_open': today_bar['open'],
+            'yesterday_open': yesterday_bar['open'],
+            'yesterday_high': yesterday_bar['high'],
+            'yesterday_low': yesterday_bar['low'],
+            'yesterday_close': yesterday_bar['close']
+        }
+
+        # Add daily levels to result
+        all_levels.update(daily_levels)
+
+        # 3. Calculate pivot levels using yesterday's data
+        # Create OHLC dict that pivots.calculate_fibonacci_pivots expects
+        yesterday_ohlc = {
+            "high": yesterday_bar['high'],
+            "low": yesterday_bar['low'],
+            "close": yesterday_bar['close']
+        }
+
+        # Calculate daily pivot points directly
+        from pivots import calculate_fibonacci_pivots
+        daily_pivot_levels = calculate_fibonacci_pivots(yesterday_ohlc)
+
+        # Format and add pivot levels
+        pivot_levels = {}
+        for level_name, level_value in daily_pivot_levels.items():
+            pivot_levels[f'daily_pivot_{level_name}'] = level_value
+
+        # Add pivot levels to result
+        all_levels.update(pivot_levels)
+
+        # 4. Calculate weekly levels
+        try:
+            # Get weekly candles
+            weekly_bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_W1, 0, 5)
+
+            if weekly_bars is not None and len(weekly_bars) >= 2:
+                # Convert to DataFrame
+                weekly_df = pd.DataFrame(weekly_bars)
+                weekly_df['time'] = pd.to_datetime(weekly_df['time'], unit='s')
+                weekly_df = weekly_df.sort_values('time', ascending=False)
+
+                # Get data for the previous completed week
+                prev_week_bar = weekly_df.iloc[1]
+
+                # Calculate weekly levels
+                weekly_levels = {
+                    'prev_week_high': prev_week_bar['high'],
+                    'prev_week_low': prev_week_bar['low']
+                }
+
+                # Calculate weekly pivot points
+                prev_week_ohlc = {
+                    "high": prev_week_bar['high'],
+                    "low": prev_week_bar['low'],
+                    "close": prev_week_bar['close']
+                }
+
+                weekly_pivot_levels = calculate_fibonacci_pivots(prev_week_ohlc)
+
+                # Format and add weekly pivot levels
+                for level_name, level_value in weekly_pivot_levels.items():
+                    pivot_levels[f'weekly_pivot_{level_name}'] = level_value
+
+                # Add weekly levels to result
+                all_levels.update(weekly_levels)
+                all_levels.update(pivot_levels)
+        except Exception as e:
+            print(f"Error calculating weekly levels: {e}")
+
+        print(f"All levels calculated for {symbol}: {all_levels}")
+        return all_levels
+
+    except Exception as e:
+        print(f"Error in update_all_levels for {symbol}: {e}")
+        return all_levels
+
+
 def get_price_levels(symbol):
     """
     Get important price levels including daily, weekly, pivot points, and Asian session ranges
@@ -338,6 +470,8 @@ def get_price_levels(symbol):
     Returns:
         dict: Dictionary containing price levels or None if data not available
     """
+    global _cached_daily_levels, _cached_weekly_levels, _cached_pivot_levels, _cached_asian_levels
+
     # Initialize empty dictionary for the levels
     price_levels = {}
 
@@ -345,92 +479,53 @@ def get_price_levels(symbol):
     current_time = get_mt5_server_time()
     print(f"\n--- Fetching price levels for {symbol} at {current_time} ---")
 
-    # Update daily levels if needed
-    if should_update_daily_levels(symbol):
-        daily_levels = update_daily_levels(symbol)
-    else:
-        daily_levels = _cached_daily_levels.get(symbol, {})
+    # Update all main levels if needed - this ensures we use consistent data
+    should_update = should_update_daily_levels(symbol) or should_update_weekly_levels(symbol)
+    if should_update or symbol not in _cached_daily_levels:
+        # Calculate all levels together using the same data source
+        updated_levels = update_all_levels(symbol)
 
-    # Add daily levels to price_levels
-    price_levels.update(daily_levels)
+        # Extract and cache the different level types
 
-    # Update weekly levels if needed
-    if should_update_weekly_levels(symbol):
-        try:
-            # Get weekly data
-            weekly_bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_W1, 0, 5)
+        # Daily levels
+        daily_levels = {k: v for k, v in updated_levels.items() if k in [
+            'today_open', 'yesterday_open', 'yesterday_high',
+            'yesterday_low', 'yesterday_close'
+        ]}
+        if daily_levels:
+            _cached_daily_levels[symbol] = daily_levels
 
-            if weekly_bars is not None and len(weekly_bars) >= 2:
-                # Convert to DataFrame
-                weekly_df = pd.DataFrame(weekly_bars)
-                weekly_df['time'] = pd.to_datetime(weekly_df['time'], unit='s')
-                weekly_df = weekly_df.sort_values('time', ascending=False)
+        # Weekly levels
+        weekly_levels = {k: v for k, v in updated_levels.items() if k in [
+            'prev_week_high', 'prev_week_low'
+        ]}
+        if weekly_levels:
+            _cached_weekly_levels[symbol] = weekly_levels
 
-                # Previous week is the second row (index 1) since they're sorted newest first
-                prev_week_data = weekly_df.iloc[1]  # Previous completed week
-                prev_week_high = prev_week_data['high']
-                prev_week_low = prev_week_data['low']
-
-                # Update weekly levels
-                weekly_levels = {
-                    'prev_week_high': prev_week_high,
-                    'prev_week_low': prev_week_low
-                }
-
-                # Cache the updated weekly levels
-                _cached_weekly_levels[symbol] = weekly_levels
-                print(f"Weekly levels updated for {symbol}: {weekly_levels}")
-            else:
-                weekly_levels = _cached_weekly_levels.get(symbol, {})
-                print(f"Using cached weekly levels for {symbol}")
-        except Exception as e:
-            print(f"Error updating weekly levels: {e}")
-            weekly_levels = _cached_weekly_levels.get(symbol, {})
-    else:
-        weekly_levels = _cached_weekly_levels.get(symbol, {})
-
-    # Add weekly levels to price_levels
-    price_levels.update(weekly_levels)
-
-    # Update pivot levels - do this daily
-    if should_update_daily_levels(symbol) or symbol not in _cached_pivot_levels:
-        try:
-            # Get pivot levels
-            daily_pivots, weekly_pivots, _ = get_pivot_levels(symbol)
-
-            pivot_levels = {}
-
-            # Add daily pivot levels if available
-            if daily_pivots.get("current") and daily_pivots["current"].get("levels"):
-                daily_levels_data = daily_pivots["current"]["levels"]
-                for level_name, level_value in daily_levels_data.items():
-                    pivot_levels[f'daily_pivot_{level_name}'] = level_value
-
-            # Add weekly pivot levels if available
-            if weekly_pivots.get("current") and weekly_pivots["current"].get("levels"):
-                weekly_levels_data = weekly_pivots["current"]["levels"]
-                for level_name, level_value in weekly_levels_data.items():
-                    pivot_levels[f'weekly_pivot_{level_name}'] = level_value
-
-            # Cache the updated pivot levels
+        # Pivot levels (both daily and weekly)
+        pivot_levels = {k: v for k, v in updated_levels.items() if 'pivot' in k.lower()}
+        if pivot_levels:
             _cached_pivot_levels[symbol] = pivot_levels
-            print(f"Pivot levels updated for {symbol}: {pivot_levels}")
-        except Exception as e:
-            print(f"Error updating pivot levels: {e}")
-            pivot_levels = _cached_pivot_levels.get(symbol, {})
-    else:
-        pivot_levels = _cached_pivot_levels.get(symbol, {})
 
-    # Add pivot levels to price_levels
-    price_levels.update(pivot_levels)
+        # Add all updated levels to price_levels
+        price_levels.update(updated_levels)
+    else:
+        # Use cached values
+        if symbol in _cached_daily_levels:
+            price_levels.update(_cached_daily_levels[symbol])
+
+        if symbol in _cached_weekly_levels:
+            price_levels.update(_cached_weekly_levels[symbol])
+
+        if symbol in _cached_pivot_levels:
+            price_levels.update(_cached_pivot_levels[symbol])
 
     # Update Asian session levels - check if the Asian session is complete
-    # Only update if we don't have today's levels or if they're not in the price levels
-    current_date = current_time.date()
+    current_date = datetime.now().date()
     asian_levels = _cached_asian_levels.get(symbol, {})
 
     # Check if Asian levels are needed and available
-    asian_complete = is_asian_session_complete()
+    asian_complete = is_after_2am_est()
     if asian_complete:
         # Check if we need to update (new day or missing levels)
         if not asian_levels or asian_levels.get('date') != current_date:
@@ -454,3 +549,128 @@ def get_price_levels(symbol):
     print(f"Total levels: {len(price_levels)}")
 
     return price_levels
+
+if __name__ == "__main__":
+    """
+    This main function tests the price level functionality directly.
+    Run this script directly to check if levels are being calculated correctly.
+    """
+    import sys
+
+    # Initialize MT5 terminal
+    if not mt5.initialize():
+        print("Failed to initialize MT5 connection")
+        sys.exit(1)
+
+    try:
+        # Symbol to test (default to EURUSD or use command line argument)
+        symbol = sys.argv[1] if len(sys.argv) > 1 else "BTCUSD"
+
+        # Get current MT5 server time
+        server_time = get_mt5_server_time()
+        print(f"\n{'='*80}")
+        print(f"MT5 PRICE LEVEL TEST - {server_time}")
+        print(f"{'='*80}")
+        print(f"Testing price levels for: {symbol}")
+
+        # Get symbol info
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            print(f"Symbol {symbol} not found")
+            sys.exit(1)
+
+        digits = symbol_info.digits
+        print(f"Symbol precision: {digits} digits")
+
+        # Check Asian session status
+        asian_complete = is_asian_session_complete()
+        print(f"\nAsian session status: {'COMPLETE' if asian_complete else 'NOT COMPLETE'}")
+        print(f"Server time: {server_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Server hour: {server_time.hour}")
+
+        # Get and display all price levels
+        print(f"\n--- Retrieving all price levels for {symbol} ---")
+        all_levels = get_price_levels(symbol)
+
+        # Display levels by category
+        print(f"\n{'='*80}")
+        print("PRICE LEVELS SUMMARY")
+        print(f"{'='*80}")
+
+        # Define level categories for organized display
+        categories = {
+            "Daily Levels": [
+                'today_open', 'yesterday_open', 'yesterday_high',
+                'yesterday_low', 'yesterday_close'
+            ],
+            "Weekly Levels": [
+                'prev_week_high', 'prev_week_low'
+            ],
+            "Daily Pivot Levels": [
+                'daily_pivot_P', 'daily_pivot_R1', 'daily_pivot_R2',
+                'daily_pivot_S1', 'daily_pivot_S2'
+            ],
+            "Weekly Pivot Levels": [
+                'weekly_pivot_P', 'weekly_pivot_R1', 'weekly_pivot_R2',
+                'weekly_pivot_S1', 'weekly_pivot_S2'
+            ],
+            "Asian Session Levels": [
+                'asian_high', 'asian_low', 'asian_mid'
+            ]
+        }
+
+        # Print levels by category
+        for category, level_names in categories.items():
+            print(f"\n{category}:")
+            print("-" * 40)
+            found_levels = False
+
+            for level_name in level_names:
+                if level_name in all_levels:
+                    value = all_levels[level_name]
+                    print(f"{level_name:20}: {value:.{digits}f}")
+                    found_levels = True
+
+            if not found_levels:
+                print("None available")
+
+        # Get current price for context
+        last_tick = mt5.symbol_info_tick(symbol)
+        if last_tick is not None:
+            current_price = (last_tick.bid + last_tick.ask) / 2
+            print(f"\nCurrent price: {current_price:.{digits}f}")
+
+            # Show which levels are close to current price
+            print(f"\nLevels close to current price:")
+            threshold = current_price * 0.0015  # 0.15% threshold
+            close_levels = []
+
+            for level_name, level_value in all_levels.items():
+                distance = abs(current_price - level_value)
+                distance_pct = (distance / current_price) * 100
+
+                if distance < threshold:
+                    close_levels.append((level_name, level_value, distance_pct))
+
+            # Sort by distance
+            close_levels.sort(key=lambda x: x[2])
+
+            if close_levels:
+                for level_name, level_value, distance_pct in close_levels:
+                    print(f"{level_name:20}: {level_value:.{digits}f} (distance: {distance_pct:.3f}%)")
+            else:
+                print("No levels within 0.15% of current price")
+
+        print(f"\n{'='*80}")
+        print(f"Test completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*80}")
+
+    except Exception as e:
+        print(f"Error during test: {e}")
+        import traceback
+        traceback.print_exc()
+
+    finally:
+        # Shutdown MT5 connection
+        mt5.shutdown()
+        print("\nMT5 connection closed")
