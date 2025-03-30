@@ -157,13 +157,14 @@ class ConsoleDashboard:
                         previous = df.iloc[idx - 1] if idx > -len(df) + 1 else None
                         previous2 = df.iloc[idx - 2] if idx > -len(df) + 2 else None
 
-                        if previous is not None and previous2 is not None:
-                            type_result, _ = analyse_candle(
-                                current, previous, previous2, {}
-                            )
-                            candle_type = type_result
-                        else:
-                            candle_type = "unknown"
+                        # Since idx already indicates position in df, we can use it directly
+                        type_result, _ = analyse_candle(
+                            df,
+                            index=idx,
+                            lookback=2,
+                            price_levels={}
+                        )
+                        candle_type = type_result
                 else:
                     candle_type = "unknown"
 

@@ -32,28 +32,38 @@ def detect_reversal_pattern(df, i):
     return is_bullish_reversal or is_bullish_ifc, is_bearish_reversal or is_bearish_ifc
 
 
-def analyse_candle(closed_candle, previous_candle, previous2_candle, price_levels):
+def analyse_candle(df, index=-1, lookback=2, price_levels=None):
     """
-    Analyze a closed candle to detect bullish or bearish patterns and touched levels.
+    Analyze a candle to detect bullish or bearish patterns and touched levels.
 
     Args:
-        closed_candle: The latest closed candle
-        previous_candle: The previous closed candle
-        previous2_candle: The 2nd previous closed candle
-        price_levels: Dictionary containing important price levels
+        df: DataFrame with OHLC data
+        index: Index of the candle to analyze in df (default -1 for most recent)
+        lookback: Number of previous candles to consider for level touches (default 2)
+        price_levels: Dictionary containing important price levels (default None)
 
     Returns:
         tuple: (candle_type, touched_levels)
             candle_type: "bull", "bear", or "none"
             touched_levels: List of levels touched by the candles
     """
+    # Ensure we have enough data for analysis
+    if price_levels is None:
+        price_levels = {}
+
+    if len(df) < 3 or abs(index) >= len(df):
+        print(f"Insufficient data for analysis. DataFrame length: {len(df)}, index: {index}")
+        return "none", []
+
+    # Extract individual candles from DataFrame
+    current = df.iloc[index]
+    prev1 = df.iloc[index - 1]
+    prev2 = df.iloc[index - 2]
+
     # Extract OHLC values from candles
-    high0, low0, close0, open0 = closed_candle["High"], closed_candle["Low"], closed_candle["Close"], closed_candle[
-        "Open"]
-    high1, low1, close1, open1 = previous_candle["High"], previous_candle["Low"], previous_candle["Close"], \
-    previous_candle["Open"]
-    high2, low2, close2, open2 = previous2_candle["High"], previous2_candle["Low"], previous2_candle["Close"], \
-    previous2_candle["Open"]
+    high0, low0, close0, open0 = current["High"], current["Low"], current["Close"], current["Open"]
+    high1, low1, close1, open1 = prev1["High"], prev1["Low"], prev1["Close"], prev1["Open"]
+    high2, low2, close2, open2 = prev2["High"], prev2["Low"], prev2["Close"], prev2["Open"]
 
     # Detect candle patterns
     bull_engulfing = low0 < low1 and high0 > high1 and close0 > open0
@@ -65,6 +75,10 @@ def analyse_candle(closed_candle, previous_candle, previous2_candle, price_level
 
     # Determine candle type
     candle_type = "bull" if bull_engulfing or bull_ifc else "bear" if bear_engulfing or bear_ifc else "none"
+
+    # If no price levels are provided, skip level detection
+    if not price_levels:
+        return candle_type, []
 
     # Detect touched levels
     touch_levels = set()
@@ -80,22 +94,29 @@ def analyse_candle(closed_candle, previous_candle, previous2_candle, price_level
         if level_value is None or not isinstance(level_value, (int, float)):
             continue
 
-        # Consider a level touched if it falls within the price range of any of the 3 candles
+        # Consider a level touched if it falls within the price range of any candle
         # or if price closes very close to it (within 0.05% range)
         threshold = level_value * 0.0005  # 0.05% threshold for "close enough"
 
-        if (low0 <= level_value <= high0) or abs(close0 - level_value) <= threshold:
-            # Current candle touches the level
-            touch_levels.add(level_name)
-            print(f"Level {level_name} = {level_value} touched by current candle")
-        elif (low1 <= level_value <= high1) or abs(close1 - level_value) <= threshold:
-            # Previous candle touches the level
-            touch_levels.add(level_name)
-            print(f"Level {level_name} = {level_value} touched by previous candle")
-        elif (low2 <= level_value <= high2) or abs(close2 - level_value) <= threshold:
-            # Previous to previous candle touches the level
-            touch_levels.add(level_name)
-            print(f"Level {level_name} = {level_value} touched by previous to previous candle")
+        # Check if the level is touched by any candle up to lookback
+        level_touched = False
+
+        # Check all relevant candles
+        for i in range(lookback + 1):
+            if i >= len(df) or abs(index - i) >= len(df):
+                break
+
+            check_candle = df.iloc[index - i]
+            check_high = check_candle["High"]
+            check_low = check_candle["Low"]
+            check_close = check_candle["Close"]
+
+            if (check_low <= level_value <= check_high) or abs(check_close - level_value) <= threshold:
+                touch_levels.add(level_name)
+                candle_desc = "current candle" if i == 0 else f"previous candle {i}"
+                print(f"Level {level_name} = {level_value} touched by {candle_desc}")
+                level_touched = True
+                break  # Found a touch, no need to check further candles for this level
 
     print(f"Found {len(touch_levels)} touched levels: {touch_levels}")
 

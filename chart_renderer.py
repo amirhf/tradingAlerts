@@ -76,12 +76,14 @@ def plot_candlestick_chart(initial_df, symbol, refresh_interval=60, send_notific
 
                         # Ensure we have enough data for analysis
                         if len(current_df) >= 3:
-                            previous_candle = current_df.iloc[-2]
-                            previous2_candle = current_df.iloc[-3]
                             closed_time = last_seen_candle_time
 
+                            # Create a dataframe slice with the necessary candles
                             candle_type, touch_levels = analyse_candle(
-                                closed_candle, previous_candle, previous2_candle, price_levels
+                                current_df,
+                                index=-1,
+                                lookback=2,
+                                price_levels=price_levels
                             )
 
                             print(f"{symbol} Candle closed at {closed_time}, type: {candle_type}, touch levels: {touch_levels}")

@@ -144,7 +144,7 @@ def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, ac
 
     return position_size, stop_points, risk_amount
 
-def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account_size=100000):
+def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account_size=100000, lookback=2):
     """
     Monitor a single symbol for candle pattern signals
 
@@ -192,15 +192,16 @@ def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account
                 if new_df.index[-1] > last_candle_time:
                     # A new candle has appeared, which means the previous one has closed
                     closed_candle = current_df.iloc[-1]
+                    previous_candle= current_df.iloc[-2]
 
                     # Ensure we have at least 3 candles for analysis
                     if len(current_df) >= 3:
-                        previous_candle = current_df.iloc[-2]
-                        previous2_candle = current_df.iloc[-3]
-
-                        # Analyze closed candle
+                        # Analyze closed candle using the DataFrame approach
                         candle_type, touch_levels = analyse_candle(
-                            closed_candle, previous_candle, previous2_candle, price_levels
+                            current_df,
+                            index=-1,
+                            lookback=lookback,
+                            price_levels=price_levels
                         )
 
                         # Log the analysis results
@@ -285,7 +286,7 @@ def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account
             time.sleep(30)  # Longer sleep on error
 
 
-def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
+def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000, lookback=2):
     """
     Monitor multiple symbols for trading signals
 
@@ -305,7 +306,7 @@ def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
     for symbol in symbols:
         thread = threading.Thread(
             target=monitor_symbol,
-            args=(symbol, symbols_data[symbol], stop_event, risk_percentage, account_size),
+            args=(symbol, symbols_data[symbol], stop_event, risk_percentage, account_size, lookback),
             daemon=True
         )
         thread.start()
@@ -383,7 +384,7 @@ if __name__ == "__main__":
                 print(f"Symbol {symbol} not found. Skipping.")
 
         if valid_symbols:
-            monitor_multiple_symbols(valid_symbols, risk_percentage, account_size)
+            monitor_multiple_symbols(valid_symbols, risk_percentage, account_size,3)
         else:
             print("No valid symbols found. Exiting.")
 
