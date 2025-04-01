@@ -75,7 +75,7 @@ def get_mt5_server_time():
         print(f"Error getting MT5 server time: {e}, falling back to local time")
         return datetime.now()
 
-def get_10min_data(symbol, num_bars=30):
+def get_10min_data(symbol, num_bars=100):
     """
     Get 10-minute data for the specified symbol
 
@@ -564,7 +564,7 @@ if __name__ == "__main__":
 
     try:
         # Symbol to test (default to EURUSD or use command line argument)
-        symbol = sys.argv[1] if len(sys.argv) > 1 else "BTCUSD"
+        symbol = sys.argv[1] if len(sys.argv) > 1 else "USDJPY"
 
         # Get current MT5 server time
         server_time = get_mt5_server_time()
