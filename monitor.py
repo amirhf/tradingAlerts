@@ -110,14 +110,11 @@ def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, ac
             pip_value = contract_size * point  # Rough fallback
 
     # Special handling for gold and other commodities
-    if symbol in ["XAUUSD", "GOLD"]:
+    if symbol in ["XAUUSD", "GOLD","XAGUSD","BTCUSD","USTEC"]:
         # For gold, each point is usually $0.01 per oz, and contract size is 100 oz
         pip_value = contract_size * 0.01
-        print(f"Gold: 1 point = ${pip_value:.2f}")
-    elif symbol in ["XAGUSD", "SILVER"]:
-        # For silver, each point is usually $0.01 per oz, and contract size is 5000 oz
-        pip_value = contract_size * 0.01
-        print(f"Silver: 1 point = ${pip_value:.2f}")
+        print(f"{symbol}: 1 point = ${pip_value:.2f}")
+
 
     # Calculate position size in lots
     if stop_points > 0 and pip_value > 0:

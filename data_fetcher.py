@@ -75,7 +75,7 @@ def get_mt5_server_time():
         print(f"Error getting MT5 server time: {e}, falling back to local time")
         return datetime.now()
 
-def get_10min_data(symbol, num_bars=100):
+def get_10min_data(symbol, num_bars=30):
     """
     Get 10-minute data for the specified symbol
 
