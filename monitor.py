@@ -3,9 +3,11 @@ Multi-symbol monitoring functionality for MT5 Chart Application
 """
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import MetaTrader5 as mt5
 import math
+from collections import deque
+import pandas as pd
 
 from data_fetcher import get_10min_data, get_price_levels
 from candle_patterns import analyse_candle
@@ -110,11 +112,10 @@ def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, ac
             pip_value = contract_size * point  # Rough fallback
 
     # Special handling for gold and other commodities
-    if symbol in ["XAUUSD", "GOLD","XAGUSD","BTCUSD","USTEC"]:
+    if symbol in ["XAUUSD", "GOLD","BTCUSD","USTEC","XAGUSD", "SILVER"]:
         # For gold, each point is usually $0.01 per oz, and contract size is 100 oz
         pip_value = contract_size * 0.01
         print(f"{symbol}: 1 point = ${pip_value:.2f}")
-
 
     # Calculate position size in lots
     if stop_points > 0 and pip_value > 0:
@@ -141,18 +142,42 @@ def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, ac
 
     return position_size, stop_points, risk_amount
 
-def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account_size=100000, lookback=2):
+def is_candle_close_time(current_time):
+    """
+    Check if the current time is within 5 seconds after a 10-minute candle close
+
+    Args:
+        current_time (datetime): The current time to check
+
+    Returns:
+        bool: True if it's within 5 seconds of a 10-minute candle close
+    """
+    # 10-minute candles close at 00, 10, 20, 30, 40, 50 minutes
+    minute = current_time.minute
+    second = current_time.second
+
+    # Check if minute is divisible by 10 and seconds are less than 5
+    is_candle_close = minute % 10 == 0 and second < 5
+
+    return is_candle_close
+
+def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, risk_percentage=0.5, account_size=100000):
     """
     Monitor a single symbol for candle pattern signals
 
     Args:
         symbol (str): Symbol to monitor
         symbol_data (dict): Dictionary to store data for this symbol
+        all_signals (dict): Shared dictionary to store signals for all symbols
+        signals_lock (threading.Lock): Lock for thread-safe access to all_signals
         stop_event (threading.Event): Event to signal thread to stop
         risk_percentage (float): Risk per trade as percentage of account
         account_size (float): Total account size in base currency
     """
     print(f"Started monitoring {symbol}")
+
+    # Maximum number of signals to store per symbol
+    max_signals_per_symbol = 10
 
     # Initialize with current data
     current_df = get_10min_data(symbol)
@@ -187,17 +212,13 @@ def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account
 
                 # If we have a new candle (last candle time has changed)
                 if new_df.index[-1] > last_candle_time:
-                    # A new candle has appeared, which means the previous one has closed
-                    closed_candle = current_df.iloc[-1]
-                    previous_candle= current_df.iloc[-2]
-
                     # Ensure we have at least 3 candles for analysis
                     if len(current_df) >= 3:
                         # Analyze closed candle using the DataFrame approach
                         candle_type, touch_levels = analyse_candle(
                             current_df,
                             index=-1,
-                            lookback=lookback,
+                            lookback=2,
                             price_levels=price_levels
                         )
 
@@ -205,69 +226,63 @@ def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account
                         print(
                             f"{symbol} candle closed at {last_candle_time}, type: {candle_type}, touch levels: {touch_levels}")
 
-                        # Send notification if it's a significant candle
+                        # Process and store signal if it's significant
                         if candle_type != "none" and len(touch_levels) >= 1:
-                            # Store the signal in symbol data
-                            symbol_data['last_signal'] = {
-                                'time': last_candle_time,
-                                'type': candle_type,
-                                'levels': touch_levels
-                            }
+                            # Current price
+                            current_price = current_df.iloc[-1]['Close']
 
                             # Calculate true range for stop loss suggestion
-                            true_range = max(closed_candle['High'], previous_candle['High']) - min(closed_candle['Low'], previous_candle['Low'])
+                            true_range = max(current_df.iloc[-1]['High'], current_df.iloc[-2]['High']) - min(current_df.iloc[-1]['Low'], current_df.iloc[-2]['Low'])
 
-                            # Get symbol point value for proper stop loss calculation
-                            symbol_info = mt5.symbol_info(symbol)
-                            if symbol_info is not None:
-                                # Calculate suggested stop loss distance (1.5x the true range)
-                                stop_distance_price = true_range * 1.5
+                            # Calculate suggested stop loss distance (1.5x the true range)
+                            stop_distance_price = true_range * 1.5
 
-                                # Calculate position size based on risk management
-                                position_size, stop_points, risk_amount = calculate_position_size(
-                                    symbol,
-                                    stop_distance_price,
-                                    risk_percentage,
-                                    account_size
-                                )
+                            # Calculate position size based on risk management
+                            position_size, stop_points, risk_amount = calculate_position_size(
+                                symbol,
+                                stop_distance_price,
+                                risk_percentage,
+                                account_size
+                            )
 
-                                position_info = (
-                                    f"\nRisk: {risk_percentage}% (${risk_amount:.2f})"
-                                    f"\nStop Loss: {stop_points} points ({stop_distance_price:.5f} price)"
-                                    f"\nPosition Size: {position_size:.2f} lots"
-                                )
-                            else:
-                                position_info = "\nCouldn't calculate position size (symbol info unavailable)"
+                            # Calculate stop loss level
+                            stop_loss = current_price - stop_distance_price if candle_type == "bull" else current_price + stop_distance_price
 
                             # Calculate regression indicator values
                             try:
                                 regression_value, regression_color, regression_direction = calculate_multi_kernel_regression(
-                                    symbol,
-                                    mt5.TIMEFRAME_M10,  # Use the same timeframe as the chart
-                                    bandwidth=25
+                                    symbol, mt5.TIMEFRAME_M10, bandwidth=25
                                 )
                                 regression_trend = "UPTREND" if regression_direction else "DOWNTREND"
-                                regression_info = f"\nRegression Indicator: {regression_value:.5f} ({regression_trend})"
                             except Exception as e:
                                 print(f"Error calculating regression for {symbol}: {e}")
-                                regression_info = "\nRegression Indicator: Calculation failed"
+                                regression_value = None
+                                regression_trend = "UNKNOWN"
 
-                            # Current price for reference
-                            current_price = closed_candle['Close']
+                            # Create signal data
+                            signal_data = {
+                                'symbol': symbol,
+                                'time': last_candle_time,
+                                'current_time': datetime.now(),
+                                'type': candle_type,
+                                'levels': touch_levels,
+                                'price': current_price,
+                                'stop_loss': stop_loss,
+                                'position_size': position_size,
+                                'risk_amount': risk_amount,
+                                'regression_value': regression_value,
+                                'regression_trend': regression_trend,
+                                'is_new': True  # Flag to indicate this is a new signal
+                            }
 
-                            # Send notification with regression and position information
-                            send_notification(
-                                subject=f"{symbol}: {candle_type.upper()} Pattern Detected",
-                                body=(
-                                    f"Symbol: {symbol}\n"
-                                    f"Time: {last_candle_time}\n"
-                                    f"Pattern: {candle_type}\n"
-                                    f"Touched levels: {touch_levels}\n"
-                                    f"Price: {current_price:.5f}"
-                                    f"{regression_info}"
-                                    f"{position_info}"
-                                ),
-                            )
+                            # Store signal in shared dictionary (thread-safe)
+                            with signals_lock:
+                                if symbol not in all_signals:
+                                    all_signals[symbol] = deque(maxlen=max_signals_per_symbol)
+                                all_signals[symbol].appendleft(signal_data)
+
+                            # Store the signal in symbol data for quick reference
+                            symbol_data['last_signal'] = signal_data
 
                     # Update the last candle time
                     symbol_data['last_candle_time'] = new_df.index[-1]
@@ -276,14 +291,181 @@ def monitor_symbol(symbol, symbol_data, stop_event, risk_percentage=0.5, account
             current_df = new_df
 
             # Sleep to avoid excessive CPU usage
-            time.sleep(10)
+            time.sleep(5)
 
         except Exception as e:
             print(f"Error in {symbol} monitoring thread: {e}")
             time.sleep(30)  # Longer sleep on error
 
+def check_and_send_signals(all_signals, signals_lock, symbols_data, stop_event, risk_percentage, account_size):
+    """
+    Periodically check for new signals across all symbols and send consolidated notifications
 
-def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000, lookback=2):
+    Args:
+        all_signals (dict): Shared dictionary with signals for all symbols
+        signals_lock (threading.Lock): Lock for thread-safe access to all_signals
+        symbols_data (dict): Dictionary with data for all symbols
+        stop_event (threading.Event): Event to signal thread to stop
+        risk_percentage (float): Risk per trade as percentage of account
+        account_size (float): Total account size in base currency
+    """
+    last_check_time = datetime.now()
+
+    while not stop_event.is_set():
+        current_time = datetime.now()
+
+        # Check for signals 5 seconds after a 10-minute candle close
+        if is_candle_close_time(current_time):
+            # Only check once per candle close
+            if (current_time - last_check_time).total_seconds() > 30:  # Ensure we don't check twice in same period
+                # Sleep 5 seconds to allow all symbol threads to process their signals
+                time.sleep(5)
+
+                # Check for new signals (thread-safe)
+                new_signals_found = False
+                with signals_lock:
+                    for symbol in all_signals:
+                        for signal in all_signals[symbol]:
+                            if signal.get('is_new', False):
+                                new_signals_found = True
+                                signal['is_new'] = False  # Mark as processed
+
+                # If new signals found, send a consolidated notification
+                if new_signals_found:
+                    send_consolidated_notification(all_signals, symbols_data, risk_percentage, account_size)
+
+                last_check_time = current_time
+
+        # Sleep for a short time to check again
+        time.sleep(1)
+
+def format_summary_table(all_signals, symbols_data):
+    """
+    Format a summary table of all monitored symbols
+
+    Args:
+        all_signals (dict): Dictionary with signals for all symbols
+        symbols_data (dict): Dictionary with data for all symbols
+
+    Returns:
+        str: Formatted summary table
+    """
+    # Create a list to hold table rows
+    table_rows = []
+
+    # Add header row
+    table_rows.append(f"{'Symbol':<8} | {'Last Signal':<11} | {'Price':<10} | {'Direction':<9} | {'SL':<10} | {'Lots':<6} | {'Time':<16}")
+    table_rows.append("-" * 80)
+
+    # Add a row for each symbol
+    for symbol in sorted(symbols_data.keys()):
+        if symbol in all_signals and len(all_signals[symbol]) > 0:
+            # Get most recent signal
+            signal = all_signals[symbol][0]
+
+            # Format time as HH:MM:SS
+            time_str = signal['time'].strftime("%H:%M:%S")
+
+            # Format direction
+            direction = "BUY" if signal['type'] == "bull" else "SELL"
+
+            # Format price and stop loss with appropriate precision
+            symbol_info = mt5.symbol_info(symbol)
+            digits = symbol_info.digits if symbol_info is not None else 5
+            price_str = f"{signal['price']:.{digits}f}"
+            sl_str = f"{signal['stop_loss']:.{digits}f}"
+
+            # Add row
+            table_rows.append(
+                f"{symbol:<8} | {direction:<11} | {price_str:<10} | {signal['regression_trend']:<9} | "
+                f"{sl_str:<10} | {signal['position_size']:<6.2f} | {time_str:<16}"
+            )
+        else:
+            # No signals for this symbol
+            table_rows.append(f"{symbol:<8} | {'NO SIGNAL':<11} | {'-':<10} | {'-':<9} | {'-':<10} | {'-':<6} | {'-':<16}")
+
+    return "\n".join(table_rows)
+
+def format_new_signals(all_signals):
+    """
+    Format details of new signals for notification
+
+    Args:
+        all_signals (dict): Dictionary with signals for all symbols
+
+    Returns:
+        str: Formatted signal details for notification
+        int: Count of new signals
+    """
+    new_signals_text = []
+    new_signals_count = 0
+
+    for symbol in sorted(all_signals.keys()):
+        for signal in all_signals[symbol]:
+            # Only include recent signals (last 10 minutes)
+            time_diff = datetime.now() - signal['current_time']
+            if time_diff.total_seconds() < 600:  # 10 minutes in seconds
+                new_signals_count += 1
+
+                # Format signal details
+                direction = "BUY" if signal['type'] == "bull" else "SELL"
+
+                # Format price with appropriate precision
+                symbol_info = mt5.symbol_info(symbol)
+                digits = symbol_info.digits if symbol_info is not None else 5
+
+                signal_text = [
+                    f"SIGNAL: {symbol} {direction}",
+                    f"Price: {signal['price']:.{digits}f}",
+                    f"Stop Loss: {signal['stop_loss']:.{digits}f}",
+                    f"Lots: {signal['position_size']:.2f}",
+                    f"Risk: ${signal['risk_amount']:.2f}",
+                    f"Regression: {signal['regression_trend']}",
+                    f"Time: {signal['time'].strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"Levels: {', '.join(signal['levels'])}"
+                ]
+
+                new_signals_text.append("\n".join(signal_text))
+
+    if new_signals_count > 0:
+        return "\n\n".join(new_signals_text), new_signals_count
+    else:
+        return "No new signals in the last 10 minutes.", 0
+
+def send_consolidated_notification(all_signals, symbols_data, risk_percentage, account_size):
+    """
+    Send a consolidated notification with all recent signals and a summary table
+
+    Args:
+        all_signals (dict): Dictionary with signals for all symbols
+        symbols_data (dict): Dictionary with data for all symbols
+        risk_percentage (float): Risk per trade as percentage of account
+        account_size (float): Total account size in base currency
+    """
+    # Format new signals
+    new_signals_text, new_signals_count = format_new_signals(all_signals)
+
+    # Format summary table
+    summary_table = format_summary_table(all_signals, symbols_data)
+
+    # Create notification content
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    notification_body = (
+        f"MT5 SIGNALS UPDATE - {current_time}\n"
+        f"Risk: {risk_percentage}% per trade (${account_size:,.2f} account)\n\n"
+        f"=== NEW SIGNALS ({new_signals_count}) ===\n"
+        f"{new_signals_text}\n\n"
+        f"=== SUMMARY TABLE ===\n"
+        f"{summary_table}"
+    )
+
+    # Send notification
+    subject = f"MT5 Signals Update - {new_signals_count} new signals" if new_signals_count > 0 else "MT5 Signals Update"
+    send_notification(subject, notification_body)
+    print(f"Sent consolidated notification with {new_signals_count} new signals at {current_time}")
+
+def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
     """
     Monitor multiple symbols for trading signals
 
@@ -295,25 +477,40 @@ def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000, 
     # Dictionary to store data for each symbol
     symbols_data = {symbol: {} for symbol in symbols}
 
+    # Dictionary to store signals for all symbols
+    all_signals = {}
+
+    # Lock for thread-safe access to the signals dictionary
+    signals_lock = threading.Lock()
+
     # Event to signal threads to stop
     stop_event = threading.Event()
 
     # Create and start a thread for each symbol
-    threads = []
+    symbol_threads = []
     for symbol in symbols:
         thread = threading.Thread(
             target=monitor_symbol,
-            args=(symbol, symbols_data[symbol], stop_event, risk_percentage, account_size, lookback),
+            args=(symbol, symbols_data[symbol], all_signals, signals_lock, stop_event, risk_percentage, account_size),
             daemon=True
         )
         thread.start()
-        threads.append(thread)
+        symbol_threads.append(thread)
+
+    # Create and start a thread for checking and sending signals
+    signal_checker_thread = threading.Thread(
+        target=check_and_send_signals,
+        args=(all_signals, signals_lock, symbols_data, stop_event, risk_percentage, account_size),
+        daemon=True
+    )
+    signal_checker_thread.start()
 
     try:
         print(f"Monitoring {len(symbols)} symbols. Press Ctrl+C to stop.")
         print(f"Risk per trade: {risk_percentage}% of ${account_size}")
+        print("Signals will be consolidated and sent after each 10-minute candle closes")
 
-        # Main loop - just keep the main thread alive and show status periodically
+        # Main loop - display periodic status updates
         while True:
             time.sleep(60)  # Check status every minute
 
@@ -321,12 +518,15 @@ def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000, 
             print("\n--- Status Update ---")
             print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+            # Show a mini version of the summary table in the console
             for symbol in symbols:
-                last_signal = symbols_data[symbol].get('last_signal')
-                if last_signal:
-                    print(f"{symbol}: Last signal at {last_signal['time']} - {last_signal['type']}")
+                if symbol in all_signals and len(all_signals[symbol]) > 0:
+                    last_signal = all_signals[symbol][0]
+                    signal_type = "BUY" if last_signal['type'] == "bull" else "SELL"
+                    time_str = last_signal['time'].strftime("%H:%M:%S")
+                    print(f"{symbol}: {signal_type} @ {last_signal['price']:.5f} - {time_str}")
                 else:
-                    print(f"{symbol}: No signals yet, close time: {symbols_data[symbol].get('last_candle_time')}")
+                    print(f"{symbol}: No signals yet")
 
             print("--------------------\n")
 
@@ -335,8 +535,10 @@ def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000, 
         stop_event.set()
 
         # Wait for threads to finish
-        for thread in threads:
+        for thread in symbol_threads:
             thread.join(timeout=1.0)
+
+        signal_checker_thread.join(timeout=1.0)
 
         print("Monitoring stopped.")
 
@@ -381,7 +583,7 @@ if __name__ == "__main__":
                 print(f"Symbol {symbol} not found. Skipping.")
 
         if valid_symbols:
-            monitor_multiple_symbols(valid_symbols, risk_percentage, account_size,3)
+            monitor_multiple_symbols(valid_symbols, risk_percentage, account_size)
         else:
             print("No valid symbols found. Exiting.")
 
