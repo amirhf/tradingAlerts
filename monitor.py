@@ -112,10 +112,11 @@ def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, ac
             pip_value = contract_size * point  # Rough fallback
 
     # Special handling for gold and other commodities
-    if symbol in ["XAUUSD", "GOLD","BTCUSD","USTEC","XAGUSD", "SILVER"]:
+    if symbol in ["XAUUSD", "GOLD", "BTCUSD","USTEC"]:
         # For gold, each point is usually $0.01 per oz, and contract size is 100 oz
         pip_value = contract_size * 0.01
-        print(f"{symbol}: 1 point = ${pip_value:.2f}")
+        print(f"Gold: 1 point = ${pip_value:.2f}")
+
 
     # Calculate position size in lots
     if stop_points > 0 and pip_value > 0:
@@ -161,6 +162,129 @@ def is_candle_close_time(current_time):
 
     return is_candle_close
 
+def get_level_proximity(current_price, price_levels, digits=5):
+    """
+    Get a list of levels that price is near to (within 0.15% range)
+
+    Args:
+        current_price (float): Current price to check
+        price_levels (dict): Dictionary of price levels
+        digits (int): Number of decimal places for formatting
+
+    Returns:
+        list: List of level names and their proximity to current price
+    """
+    close_levels = []
+
+    if not price_levels:
+        return close_levels
+
+    # Define proximity threshold as 0.15%
+    threshold_pct = 0.0015
+    threshold = current_price * threshold_pct
+
+    for level_name, level_value in price_levels.items():
+        if level_value is None or not isinstance(level_value, (int, float)):
+            continue
+
+        distance = abs(current_price - level_value)
+        distance_pct = (distance / current_price) * 100
+
+        if distance <= threshold:
+            close_levels.append({
+                'name': level_name,
+                'value': level_value,
+                'distance': distance,
+                'distance_pct': distance_pct
+            })
+
+    # Sort by proximity (closest first)
+    close_levels.sort(key=lambda x: x['distance_pct'])
+
+    # Format the results for logging
+    formatted_levels = []
+    for level in close_levels:
+        formatted_levels.append(
+            f"{level['name']}={level['value']:.{digits}f} ({level['distance_pct']:.2f}%)"
+        )
+
+    return formatted_levels
+
+def analyze_candle_diagnostic(df, index, price_levels, symbol):
+    """
+    Analyze a candle with detailed diagnostics to help identify why signals might not be generated
+
+    Args:
+        df: DataFrame with OHLC data
+        index: Index of the candle to analyze
+        price_levels: Dictionary of price levels
+        symbol: Symbol being analyzed
+
+    Returns:
+        dict: Diagnostic information
+    """
+    # Get symbol info for formatting
+    symbol_info = mt5.symbol_info(symbol)
+    digits = symbol_info.digits if symbol_info is not None else 5
+
+    # Ensure we have enough data
+    if len(df) < 3 or abs(index) >= len(df):
+        return {
+            'error': f"Insufficient data for analysis. DataFrame length: {len(df)}, index: {index}"
+        }
+
+    # Extract candles
+    current = df.iloc[index]
+    prev1 = df.iloc[index-1]
+    prev2 = df.iloc[index-2]
+
+    # Extract OHLC values
+    high0, low0, close0, open0 = current["High"], current["Low"], current["Close"], current["Open"]
+    high1, low1, close1, open1 = prev1["High"], prev1["Low"], prev1["Close"], prev1["Open"]
+    high2, low2, close2, open2 = prev2["High"], prev2["Low"], prev2["Close"], prev2["Open"]
+
+    # Check pattern conditions
+    bull_engulfing = low0 < low1 and high0 > high1 and close0 > open0
+    bear_engulfing = high0 > high1 and low0 < low1 and close0 < open0
+
+    large_body = abs(close0 - open0) >= 0.5 * (high0 - low0)
+    bull_ifc = close0 > high1 and close0 > high2 and large_body and close0 > open0
+    bear_ifc = close0 < low1 and close0 < low2 and large_body and close0 < open0
+
+    # Check proximity to levels
+    close_levels = get_level_proximity(close0, price_levels, digits)
+
+    # True range calculation
+    true_range = max(high0, high1) - min(low0, low1)
+
+    # Compile diagnostic results
+    diagnostics = {
+        'symbol': symbol,
+        'time': df.index[index],
+        'ohlc': {
+            'open': f"{open0:.{digits}f}",
+            'high': f"{high0:.{digits}f}",
+            'low': f"{low0:.{digits}f}",
+            'close': f"{close0:.{digits}f}"
+        },
+        'pattern_conditions': {
+            'bull_engulfing': bull_engulfing,
+            'bear_engulfing': bear_engulfing,
+            'large_body': large_body,
+            'bull_ifc': bull_ifc,
+            'bear_ifc': bear_ifc,
+            'candle_type': "bull" if bull_engulfing or bull_ifc else "bear" if bear_engulfing or bear_ifc else "none"
+        },
+        'level_proximity': {
+            'close_levels': close_levels,
+            'has_close_levels': len(close_levels) > 0
+        },
+        'true_range': f"{true_range:.{digits}f}",
+        'would_signal': (bull_engulfing or bull_ifc or bear_engulfing or bear_ifc) and len(close_levels) > 0
+    }
+
+    return diagnostics
+
 def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, risk_percentage=0.5, account_size=100000):
     """
     Monitor a single symbol for candle pattern signals
@@ -175,6 +299,9 @@ def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, r
         account_size (float): Total account size in base currency
     """
     print(f"Started monitoring {symbol}")
+
+    # Set detailed diagnostic logging for specific symbols (especially XAUUSD)
+    detailed_logging = symbol in ["XAUUSD", "GOLD"]
 
     # Maximum number of signals to store per symbol
     max_signals_per_symbol = 10
@@ -192,8 +319,35 @@ def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, r
     if not price_levels:
         print(f"Could not retrieve price levels for {symbol}. Will use empty levels.")
         price_levels = {}
+    else:
+        # Log price levels for diagnostic purposes
+        symbol_info = mt5.symbol_info(symbol)
+        digits = symbol_info.digits if symbol_info is not None else 5
+
+        print(f"\n === {symbol} Price Levels ===")
+        for level_name, level_value in sorted(price_levels.items()):
+            if level_value is not None:
+                print(f"  {level_name}: {level_value:.{digits}f}")
 
     symbol_data['price_levels'] = price_levels
+
+    # Get last tick info
+    tick = mt5.symbol_info_tick(symbol)
+    if tick:
+        current_price = (tick.bid + tick.ask) / 2
+        symbol_data['current_price'] = current_price
+
+        # Log nearby levels at startup
+        symbol_info = mt5.symbol_info(symbol)
+        digits = symbol_info.digits if symbol_info is not None else 5
+        close_levels = get_level_proximity(current_price, price_levels, digits)
+
+        if close_levels:
+            print(f"\n{symbol} is currently near these levels:")
+            for level in close_levels:
+                print(f"  {level}")
+        else:
+            print(f"\n{symbol} is not currently near any significant levels")
 
     # Main monitoring loop
     while not stop_event.is_set():
@@ -206,6 +360,12 @@ def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, r
                 time.sleep(5)
                 continue
 
+            # Update current price
+            tick = mt5.symbol_info_tick(symbol)
+            if tick:
+                current_price = (tick.bid + tick.ask) / 2
+                symbol_data['current_price'] = current_price
+
             # Check if we have current data to compare with
             if current_df is not None and not current_df.empty:
                 last_candle_time = symbol_data.get('last_candle_time')
@@ -214,6 +374,28 @@ def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, r
                 if new_df.index[-1] > last_candle_time:
                     # Ensure we have at least 3 candles for analysis
                     if len(current_df) >= 3:
+                        # Run diagnostic analysis for detailed logging
+                        if detailed_logging:
+                            diagnostics = analyze_candle_diagnostic(current_df, -1, price_levels, symbol)
+
+                            print(f"\n=== DETAILED DIAGNOSTICS FOR {symbol} ===")
+                            print(f"Time: {diagnostics['time']}")
+                            print(f"OHLC: {diagnostics['ohlc']}")
+                            print(f"Pattern conditions:")
+                            for cond, value in diagnostics['pattern_conditions'].items():
+                                print(f"  {cond}: {value}")
+
+                            print(f"Level proximity:")
+                            if diagnostics['level_proximity']['close_levels']:
+                                for level in diagnostics['level_proximity']['close_levels']:
+                                    print(f"  {level}")
+                            else:
+                                print("  No levels in proximity")
+
+                            print(f"True range: {diagnostics['true_range']}")
+                            print(f"Would generate signal: {diagnostics['would_signal']}")
+                            print(f"========================================")
+
                         # Analyze closed candle using the DataFrame approach
                         candle_type, touch_levels = analyse_candle(
                             current_df,
@@ -283,6 +465,14 @@ def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, r
 
                             # Store the signal in symbol data for quick reference
                             symbol_data['last_signal'] = signal_data
+
+                            print(f"*** NEW SIGNAL GENERATED for {symbol}: {candle_type.upper()} at {current_price} ***")
+                        else:
+                            # Log why signal wasn't generated
+                            if candle_type == "none":
+                                print(f"{symbol}: No pattern detected (not bull or bear)")
+                            elif len(touch_levels) == 0:
+                                print(f"{symbol}: Pattern {candle_type} detected but no price levels touched")
 
                     # Update the last candle time
                     symbol_data['last_candle_time'] = new_df.index[-1]
@@ -354,11 +544,17 @@ def format_summary_table(all_signals, symbols_data):
     table_rows = []
 
     # Add header row
-    table_rows.append(f"{'Symbol':<8} | {'Last Signal':<11} | {'Price':<10} | {'Direction':<9} | {'SL':<10} | {'Lots':<6} | {'Time':<16}")
-    table_rows.append("-" * 80)
+    table_rows.append(f"{'Symbol':<8} | {'Last Signal':<11} | {'Price':<10} | {'Direction':<9} | {'SL':<10} | {'Lots':<6} | {'Time':<16} | {'Close Levels'}")
+    table_rows.append("-" * 100)
 
     # Add a row for each symbol
     for symbol in sorted(symbols_data.keys()):
+        symbol_info = mt5.symbol_info(symbol)
+        digits = symbol_info.digits if symbol_info is not None else 5
+
+        current_price = symbols_data[symbol].get('current_price', 0)
+        price_levels = symbols_data[symbol].get('price_levels', {})
+
         if symbol in all_signals and len(all_signals[symbol]) > 0:
             # Get most recent signal
             signal = all_signals[symbol][0]
@@ -370,19 +566,30 @@ def format_summary_table(all_signals, symbols_data):
             direction = "BUY" if signal['type'] == "bull" else "SELL"
 
             # Format price and stop loss with appropriate precision
-            symbol_info = mt5.symbol_info(symbol)
-            digits = symbol_info.digits if symbol_info is not None else 5
             price_str = f"{signal['price']:.{digits}f}"
             sl_str = f"{signal['stop_loss']:.{digits}f}"
+
+            # Get levels close to current price
+            close_levels = get_level_proximity(current_price, price_levels, digits)
+            close_levels_str = ", ".join(close_levels) if close_levels else "None"
 
             # Add row
             table_rows.append(
                 f"{symbol:<8} | {direction:<11} | {price_str:<10} | {signal['regression_trend']:<9} | "
-                f"{sl_str:<10} | {signal['position_size']:<6.2f} | {time_str:<16}"
+                f"{sl_str:<10} | {signal['position_size']:<6.2f} | {time_str:<16} | {close_levels_str}"
             )
         else:
             # No signals for this symbol
-            table_rows.append(f"{symbol:<8} | {'NO SIGNAL':<11} | {'-':<10} | {'-':<9} | {'-':<10} | {'-':<6} | {'-':<16}")
+            # Format current price
+            price_str = f"{current_price:.{digits}f}" if current_price else "-"
+
+            # Get levels close to current price
+            close_levels = get_level_proximity(current_price, price_levels, digits)
+            close_levels_str = ", ".join(close_levels) if close_levels else "None"
+
+            table_rows.append(
+                f"{symbol:<8} | {'NO SIGNAL':<11} | {price_str:<10} | {'-':<9} | {'-':<10} | {'-':<6} | {'-':<16} | {close_levels_str}"
+            )
 
     return "\n".join(table_rows)
 
@@ -465,6 +672,65 @@ def send_consolidated_notification(all_signals, symbols_data, risk_percentage, a
     send_notification(subject, notification_body)
     print(f"Sent consolidated notification with {new_signals_count} new signals at {current_time}")
 
+def print_symbol_status_update(symbol, symbols_data, all_signals):
+    """
+    Print detailed status update for a symbol including price levels
+
+    Args:
+        symbol (str): Symbol to print status for
+        symbols_data (dict): Dictionary with data for all symbols
+        all_signals (dict): Dictionary with signals for all symbols
+    """
+    symbol_info = mt5.symbol_info(symbol)
+    digits = symbol_info.digits if symbol_info is not None else 5
+
+    # Get current data
+    current_price = symbols_data[symbol].get('current_price', 0)
+    price_levels = symbols_data[symbol].get('price_levels', {})
+
+    # Format current price
+    price_str = f"{current_price:.{digits}f}" if current_price else "Unknown"
+
+    # Get levels close to current price
+    close_levels = get_level_proximity(current_price, price_levels, digits)
+
+    print(f"\n=== {symbol} Status ===")
+    print(f"Current price: {price_str}")
+
+    # Print signal info if available
+    if symbol in all_signals and len(all_signals[symbol]) > 0:
+        signal = all_signals[symbol][0]
+        signal_type = "BUY" if signal['type'] == "bull" else "SELL"
+        signal_time = signal['time'].strftime("%H:%M:%S")
+        print(f"Last signal: {signal_type} @ {signal['price']:.{digits}f} ({signal_time})")
+        print(f"Stop loss: {signal['stop_loss']:.{digits}f}")
+        print(f"Position size: {signal['position_size']:.2f} lots")
+        print(f"Touched levels: {', '.join(signal['levels'])}")
+        print(f"Regression trend: {signal['regression_trend']}")
+    else:
+        print("No signals yet")
+
+    # Print price levels information
+    if close_levels:
+        print(f"Price is near these levels:")
+        for level in close_levels:
+            print(f"  {level}")
+    else:
+        print("Price is not near any significant levels")
+
+    # Print some key price levels
+    if price_levels:
+        print("\nKey price levels:")
+        important_levels = [
+            'today_open', 'yesterday_high', 'yesterday_low',
+            'daily_pivot_P', 'daily_pivot_R1', 'daily_pivot_S1',
+            'asian_high', 'asian_low'
+        ]
+
+        for level in important_levels:
+            if level in price_levels and price_levels[level] is not None:
+                print(f"  {level}: {price_levels[level]:.{digits}f}")
+
 def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
     """
     Monitor multiple symbols for trading signals
@@ -512,23 +778,19 @@ def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
 
         # Main loop - display periodic status updates
         while True:
-            time.sleep(60)  # Check status every minute
+            time.sleep(60)  # Status update every minute
 
             # Print status
-            print("\n--- Status Update ---")
-            print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print("\n" + "=" * 80)
+            print(f"STATUS UPDATE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print("=" * 80)
 
-            # Show a mini version of the summary table in the console
+            # Print detailed status for each symbol
             for symbol in symbols:
-                if symbol in all_signals and len(all_signals[symbol]) > 0:
-                    last_signal = all_signals[symbol][0]
-                    signal_type = "BUY" if last_signal['type'] == "bull" else "SELL"
-                    time_str = last_signal['time'].strftime("%H:%M:%S")
-                    print(f"{symbol}: {signal_type} @ {last_signal['price']:.5f} - {time_str}")
-                else:
-                    print(f"{symbol}: No signals yet")
+                with signals_lock:  # Safely access shared signal data
+                    print_symbol_status_update(symbol, symbols_data, all_signals)
 
-            print("--------------------\n")
+            print("=" * 80)
 
     except KeyboardInterrupt:
         print("\nStopping monitoring...")
