@@ -15,6 +15,14 @@ from notifications import send_notification
 # Import the regression indicator function
 from regression import calculate_multi_kernel_regression
 
+"""
+Fixed position size calculator with enhanced debugging and error handling
+"""
+import math
+import logging
+from connection import mt5_connection
+import MetaTrader5 as mt5
+
 
 def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, account_size=100000):
     """
@@ -32,116 +40,210 @@ def calculate_position_size(symbol, stop_distance_price, risk_percentage=0.5, ac
             stop_points: Stop loss distance in points
             risk_amount: Amount risked in account currency
     """
-    # Get symbol info
-    symbol_info = mt5.symbol_info(symbol)
-    if symbol_info is None:
-        print(f"Error: Unable to get symbol info for {symbol}")
+    logging.info(f"🔶 Position size calculation for {symbol}")
+    logging.info(
+        f"🔶 Parameters: stop_distance={stop_distance_price}, risk_pct={risk_percentage}%, account=${account_size}")
+
+    try:
+        with mt5_connection():
+            # Get symbol info
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                logging.error(f"Error: Unable to get symbol info for {symbol}")
+                return 0, 0, 0
+
+            # Log symbol properties for debugging
+            logging.info(f"Symbol: {symbol}")
+            logging.info(f"Point: {symbol_info.point}")
+            logging.info(f"Contract size: {symbol_info.trade_contract_size}")
+            logging.info(f"Tick size: {symbol_info.trade_tick_size}")
+            logging.info(f"Tick value: {symbol_info.trade_tick_value}")
+
+            # Get point value (minimum price change)
+            point = symbol_info.point
+
+            # Ensure we have a valid point value
+            if point <= 0:
+                logging.error(f"Invalid point value: {point}")
+                return 0, 0, 0
+
+            # Convert price-based stop to points
+            stop_points = int(stop_distance_price / point)
+            logging.info(f"Stop distance: {stop_distance_price:.5f} price = {stop_points} points")
+
+            # Check if stop_points is valid
+            if stop_points <= 0:
+                logging.error(f"Invalid stop points: {stop_points}. Stop distance too small.")
+                return 0, 0, 0
+
+            # Calculate risk amount in account currency
+            # Important! risk_percentage is expected as a percentage value (e.g., 0.5 for 0.5%)
+            risk_amount = account_size * (risk_percentage / 100)
+            logging.info(f"Risk amount: ${risk_amount:.2f}")
+
+            # Check if risk_amount is valid
+            if risk_amount <= 0:
+                logging.error(f"Invalid risk amount: {risk_amount}")
+                return 0, 0, 0
+
+            # Get contract specifications
+            contract_size = symbol_info.trade_contract_size  # Standard lot size
+
+            # Check contract size
+            if contract_size <= 0:
+                logging.error(f"Invalid contract size: {contract_size}")
+                return 0, 0, 0
+
+            # For forex pairs, we need to handle the different quote currencies
+            # The symbol base currency is the first 3 letters (e.g., EUR in EURUSD)
+            # The quote currency is the last 3 letters (e.g., USD in EURUSD)
+            base_currency = symbol[:3] if len(symbol) >= 6 else ""
+            quote_currency = symbol[3:6] if len(symbol) >= 6 else ""
+            account_currency = "USD"  # Assuming USD account
+
+            logging.info(f"Base currency: {base_currency}, Quote currency: {quote_currency}")
+
+            # Calculate pip value (point value in account currency)
+            # For major forex pairs, we need to consider the quote currency
+            pip_value = 0
+
+            # Get current price
+            try:
+                current_price = (symbol_info.bid + symbol_info.ask) / 2
+                logging.info(f"Current price: {current_price}")
+            except Exception as e:
+                logging.error(f"Error getting current price: {e}")
+                current_price = 0
+
+            if quote_currency == account_currency:
+                # Direct quote (e.g., EURUSD for USD account)
+                pip_value = contract_size * point
+                logging.info(f"Direct quote: 1 point = ${pip_value:.5f}")
+            elif base_currency == account_currency:
+                # Indirect quote (e.g., USDCHF for USD account)
+                # Need to convert from quote currency to account currency
+                if current_price > 0:
+                    pip_value = (contract_size * point) / current_price
+                    logging.info(f"Indirect quote: 1 point = ${pip_value:.5f} at price {current_price:.5f}")
+                else:
+                    logging.error("Invalid current price for indirect quote")
+                    pip_value = contract_size * point  # Fallback
+            else:
+                # Cross rates (e.g., EURGBP for USD account)
+                # We need to find conversion rate to USD
+                # This is simplified - in production you might need to get actual conversion rates
+                try:
+                    # Try to get conversion rate via USD pairs
+                    conversion_symbol = f"{quote_currency}{account_currency}"
+                    logging.info(f"Trying conversion via {conversion_symbol}")
+                    conversion_info = mt5.symbol_info(conversion_symbol)
+
+                    if conversion_info is not None:
+                        # Convert using the quote currency to USD rate
+                        conversion_rate = (conversion_info.bid + conversion_info.ask) / 2
+                        pip_value = contract_size * point * conversion_rate
+                        logging.info(f"Cross rate: 1 point = ${pip_value:.5f} via {conversion_symbol}")
+                    else:
+                        # Try reverse conversion
+                        conversion_symbol = f"{account_currency}{quote_currency}"
+                        logging.info(f"Trying reverse conversion via {conversion_symbol}")
+                        conversion_info = mt5.symbol_info(conversion_symbol)
+
+                        if conversion_info is not None:
+                            conversion_rate = (conversion_info.bid + conversion_info.ask) / 2
+                            pip_value = (contract_size * point) / conversion_rate
+                            logging.info(f"Cross rate (reverse): 1 point = ${pip_value:.5f} via {conversion_symbol}")
+                        else:
+                            # Fallback to estimation
+                            pip_value = contract_size * point * 1.0  # Rough estimate
+                            logging.warning(f"Couldn't determine accurate pip value, using estimate: {pip_value}")
+                except Exception as e:
+                    logging.error(f"Error in currency conversion: {e}")
+                    pip_value = contract_size * point  # Rough fallback
+
+            # Special handling for gold and other commodities
+            if symbol in ["XAUUSD", "GOLD", "BTCUSD", "USTEC"]:
+                # For gold, each point is usually $0.01 per oz, and contract size is 100 oz
+                pip_value = contract_size * 0.01
+                logging.info(f"Special instrument: 1 point = ${pip_value:.2f}")
+
+            # Check if pip_value is valid
+            if pip_value <= 0:
+                logging.error(f"Invalid pip value: {pip_value}")
+                return 0, 0, 0
+
+            # Calculate position size in lots
+            position_size = risk_amount / (stop_points * pip_value)
+            logging.info(
+                f"Position size calculation: {risk_amount:.2f} / ({stop_points} * {pip_value:.5f}) = {position_size:.2f} lots")
+
+            if position_size <= 0:
+                logging.error("Position size calculation resulted in zero or negative value")
+                return 0, 0, 0
+
+            # Round to nearest valid lot step
+            volume_step = symbol_info.volume_step
+            if volume_step > 0:
+                position_size = math.floor(position_size / volume_step) * volume_step
+                logging.info(f"Rounded down to volume step {volume_step}: {position_size:.2f} lots")
+            else:
+                logging.warning(f"Invalid volume step: {volume_step}, using unrounded position size")
+
+            # Ensure position size is within allowed limits
+            try:
+                volume_min = symbol_info.volume_min
+                volume_max = symbol_info.volume_max
+
+                position_size = max(position_size, volume_min)
+                position_size = min(position_size, volume_max)
+
+                logging.info(f"Final position size: {position_size:.2f} lots (min: {volume_min}, max: {volume_max})")
+            except Exception as e:
+                logging.error(f"Error applying volume limits: {e}")
+
+            return position_size, stop_points, risk_amount
+
+    except Exception as e:
+        logging.error(f"Error in calculate_position_size: {e}")
         return 0, 0, 0
 
-    # Print symbol properties for debugging
-    print(f"Symbol: {symbol}")
-    print(f"Point: {symbol_info.point}")
-    print(f"Contract size: {symbol_info.trade_contract_size}")
-    print(f"Tick size: {symbol_info.trade_tick_size}")
-    print(f"Tick value: {symbol_info.trade_tick_value}")
 
-    # Get point value (minimum price change)
-    point = symbol_info.point
+# Test function to verify position size calculation
+def test_position_size_calculation(symbol="EURUSD", risk_percentage=0.5, account_size=100000):
+    """Test position size calculation with a fixed stop distance"""
+    # Get symbol info and calculate a reasonable stop distance
+    try:
+        with mt5_connection():
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                logging.error(f"Symbol {symbol} not found")
+                return
 
-    # Convert price-based stop to points
-    stop_points = int(stop_distance_price / point)
-    print(f"Stop distance: {stop_distance_price:.5f} price = {stop_points} points")
+            # Get current price
+            current_price = (symbol_info.bid + symbol_info.ask) / 2
 
-    # Calculate risk amount in account currency
-    risk_amount = account_size * (risk_percentage / 100)
-    print(f"Risk amount: ${risk_amount:.2f}")
+            # Use a 1% stop distance for testing
+            stop_distance_price = current_price * 0.01  # 1% of current price
 
-    # Get contract specifications
-    contract_size = symbol_info.trade_contract_size  # Standard lot size
+            logging.info(f"Testing position size calculation for {symbol}")
+            logging.info(f"Stop distance: {stop_distance_price} ({current_price * 0.01:.5f})")
+            logging.info(f"Risk: {risk_percentage}% of ${account_size}")
 
-    # For forex pairs, we need to handle the different quote currencies
-    # The symbol base currency is the first 3 letters (e.g., EUR in EURUSD)
-    # The quote currency is the last 3 letters (e.g., USD in EURUSD)
-    base_currency = symbol[:3] if len(symbol) >= 6 else ""
-    quote_currency = symbol[3:6] if len(symbol) >= 6 else ""
-    account_currency = "USD"  # Assuming USD account
+            # Calculate position size
+            position_size, stop_points, risk_amount = calculate_position_size(
+                symbol, stop_distance_price, risk_percentage, account_size
+            )
 
-    # Calculate pip value (point value in account currency)
-    # For major forex pairs, we need to consider the quote currency
-    pip_value = 0
+            logging.info(
+                f"Test results: Position size = {position_size}, Stop points = {stop_points}, Risk amount = ${risk_amount:.2f}")
 
-    if quote_currency == account_currency:
-        # Direct quote (e.g., EURUSD for USD account)
-        pip_value = contract_size * point
-        print(f"Direct quote: 1 point = ${pip_value:.5f}")
-    elif base_currency == account_currency:
-        # Indirect quote (e.g., USDCHF for USD account)
-        # Need to convert from quote currency to account currency
-        current_price = (symbol_info.bid + symbol_info.ask) / 2
-        pip_value = (contract_size * point) / current_price
-        print(f"Indirect quote: 1 point = ${pip_value:.5f} at price {current_price:.5f}")
-    else:
-        # Cross rates (e.g., EURGBP for USD account)
-        # We need to find conversion rate to USD
-        # This is simplified - in production you might need to get actual conversion rates
-        try:
-            # Try to get conversion rate via USD pairs
-            conversion_symbol = f"{quote_currency}{account_currency}"
-            conversion_info = mt5.symbol_info(conversion_symbol)
-
-            if conversion_info is not None:
-                # Convert using the quote currency to USD rate
-                conversion_rate = (conversion_info.bid + conversion_info.ask) / 2
-                pip_value = contract_size * point * conversion_rate
-                print(f"Cross rate: 1 point = ${pip_value:.5f} via {conversion_symbol}")
-            else:
-                # Try reverse conversion
-                conversion_symbol = f"{account_currency}{quote_currency}"
-                conversion_info = mt5.symbol_info(conversion_symbol)
-
-                if conversion_info is not None:
-                    conversion_rate = (conversion_info.bid + conversion_info.ask) / 2
-                    pip_value = (contract_size * point) / conversion_rate
-                    print(f"Cross rate (reverse): 1 point = ${pip_value:.5f} via {conversion_symbol}")
-                else:
-                    # Fallback to estimation
-                    pip_value = contract_size * point * 1.0  # Rough estimate
-                    print(f"Warning: Couldn't determine accurate pip value, using estimate")
-        except Exception as e:
-            print(f"Error in currency conversion: {e}")
-            pip_value = contract_size * point  # Rough fallback
-
-    # Special handling for gold and other commodities
-    if symbol in ["XAUUSD", "GOLD", "BTCUSD","USTEC"]:
-        # For gold, each point is usually $0.01 per oz, and contract size is 100 oz
-        pip_value = contract_size * 0.01
-        print(f"Gold: 1 point = ${pip_value:.2f}")
+            return position_size, stop_points, risk_amount
+    except Exception as e:
+        logging.error(f"Error in test_position_size_calculation: {e}")
+        return 0, 0, 0
 
 
-    # Calculate position size in lots
-    if stop_points > 0 and pip_value > 0:
-        # Risk per position = stop_points * pip_value * position_size_in_lots
-        # So position_size_in_lots = risk_amount / (stop_points * pip_value)
-        position_size = risk_amount / (stop_points * pip_value)
-        print(
-            f"Position size calculation: {risk_amount:.2f} / ({stop_points} * {pip_value:.5f}) = {position_size:.2f} lots")
-    else:
-        position_size = 0
-        print("Warning: Could not calculate position size (zero stop points or pip value)")
 
-    # Round to nearest valid lot step
-    volume_step = symbol_info.volume_step
-    if volume_step > 0:
-        position_size = math.floor(position_size / volume_step) * volume_step
-        print(f"Rounded down to volume step {volume_step}: {position_size:.2f} lots")
-
-    # Ensure position size is within allowed limits
-    position_size = max(position_size, symbol_info.volume_min)
-    position_size = min(position_size, symbol_info.volume_max)
-    print(
-        f"Final position size: {position_size:.2f} lots (min: {symbol_info.volume_min}, max: {symbol_info.volume_max})")
-
-    return position_size, stop_points, risk_amount
 
 def is_candle_close_time(current_time):
     """
@@ -731,26 +833,36 @@ def print_symbol_status_update(symbol, symbols_data, all_signals):
             if level in price_levels and price_levels[level] is not None:
                 print(f"  {level}: {price_levels[level]:.{digits}f}")
 
-def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
+
+
+
+# Modified monitor_multiple_symbols function that accepts external dictionaries
+def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000,
+                             all_signals=None, symbols_data=None, stop_event=None):
     """
-    Monitor multiple symbols for trading signals
+    Monitor multiple symbols for trading signals with external data storage
 
     Args:
         symbols (list): List of symbols to monitor
         risk_percentage (float): Risk per trade as percentage of account
         account_size (float): Total account size in base currency
+        all_signals (dict, optional): External dictionary to store signals
+        symbols_data (dict, optional): External dictionary to store symbol data
+        stop_event (threading.Event, optional): External event to signal stop
     """
-    # Dictionary to store data for each symbol
-    symbols_data = {symbol: {} for symbol in symbols}
+    # Initialize dictionaries if not provided
+    if symbols_data is None:
+        symbols_data = {symbol: {} for symbol in symbols}
 
-    # Dictionary to store signals for all symbols
-    all_signals = {}
+    if all_signals is None:
+        all_signals = {}
+
+    # Create a local stop event if not provided
+    if stop_event is None:
+        stop_event = threading.Event()
 
     # Lock for thread-safe access to the signals dictionary
     signals_lock = threading.Lock()
-
-    # Event to signal threads to stop
-    stop_event = threading.Event()
 
     # Create and start a thread for each symbol
     symbol_threads = []
@@ -777,7 +889,7 @@ def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
         print("Signals will be consolidated and sent after each 10-minute candle closes")
 
         # Main loop - display periodic status updates
-        while True:
+        while not stop_event.is_set():
             time.sleep(60)  # Status update every minute
 
             # Print status
@@ -805,6 +917,7 @@ def monitor_multiple_symbols(symbols, risk_percentage=0.5, account_size=100000):
         print("Monitoring stopped.")
 
 
+# Rest of the functions remain the same...
 if __name__ == "__main__":
     # This allows running the monitor directly for testing
     if not mt5.initialize():
