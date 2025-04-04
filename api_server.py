@@ -21,6 +21,8 @@ from candle_patterns import analyse_candle
 from market_utils import get_current_price
 from regression import calculate_multi_kernel_regression
 from notifications import send_notification
+from fastapi.middleware.cors import CORSMiddleware
+
 
 # Load environment variables
 dotenv.load_dotenv()
@@ -96,6 +98,13 @@ class PriceResponse(BaseModel):
 # --- FastAPI App ---
 app = FastAPI(title="MT5 Trading and Monitoring API", version="1.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For development; in production specify actual domains like ["https://yourfrontend.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Update the start_monitoring_background function in api_server.py
 
