@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { XCircle, CheckCircle, PlayCircle, StopCircle, Settings, RefreshCw, ChevronRight, BarChart2, Clock, DollarSign, ArrowUp, ArrowDown, AlertCircle, TrendingUp, TrendingDown } from 'lucide-react';
 import config from './config';
+import SymbolSelector from './SymbolSelector';
 
 // Main App Component
 const App = () => {
@@ -309,12 +310,9 @@ app.add_middleware(
         {error && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">{error}</div>}
         
         <div className="mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Symbols to Monitor (comma-separated)</label>
-          <input 
-            type="text" 
-            className="w-full p-2 border rounded focus:ring focus:ring-blue-300"
+        <SymbolSelector 
             value={symbolInput}
-            onChange={(e) => setSymbolInput(e.target.value)}
+            onChange={setSymbolInput}
             disabled={monitorStatus.active || isLoading}
           />
         </div>
