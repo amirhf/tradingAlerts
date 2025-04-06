@@ -22,7 +22,7 @@ load_dotenv()
 MAX_REQUESTS_PER_MINUTE = int(os.getenv("MAX_REQUESTS_PER_MINUTE", "60"))
 API_KEY_HEADER = "X-API-Key"
 DEFAULT_API_KEY = os.getenv("API_KEY", "")  # Set a default API key in .env file
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:4173").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 # Initialize API key header authentication
 api_key_header = APIKeyHeader(name=API_KEY_HEADER, auto_error=False)
