@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { XCircle, CheckCircle, PlayCircle, StopCircle, Settings, RefreshCw, ChevronRight, BarChart2, Clock, DollarSign, ArrowUp, ArrowDown, AlertCircle, TrendingUp, TrendingDown } from 'lucide-react';
+import config from './config';
 
 // Main App Component
 const App = () => {
@@ -20,8 +21,18 @@ const App = () => {
   // View state
   const [activeView, setActiveView] = useState('dashboard'); // 'dashboard', 'symbolDetail'
 
-  // API base URL
-  const API_BASE_URL = 'http://localhost:8000';
+  // API base URL from config
+  const API_BASE_URL = config.API_BASE_URL;
+  // API key from config (will add this to our security implementation)
+  const API_KEY = config.API_KEY;
+
+  // Helper function to add the API key to requests
+  const addAuthHeader = (headers = {}) => {
+    return {
+      ...headers,
+      'X-API-Key': API_KEY
+    };
+  }
 
   // Fetch health status
   const fetchHealthStatus = async () => {
@@ -29,9 +40,9 @@ const App = () => {
       const response = await fetch(`${API_BASE_URL}/health`, {
         // Adding these options won't solve CORS but will make the error more descriptive
         mode: 'cors',
-        headers: {
+        headers: addAuthHeader({
           'Content-Type': 'application/json'
-        },
+        }),
       });
       
       if (!response.ok) {
@@ -55,7 +66,9 @@ const App = () => {
   // Fetch monitor status
   const fetchMonitorStatus = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/monitor/status`);
+      const response = await fetch(`${API_BASE_URL}/monitor/status`, {
+        headers: addAuthHeader()
+      });
       const data = await response.json();
       setMonitorStatus(data);
     } catch (err) {
@@ -68,7 +81,9 @@ const App = () => {
     if (!monitorStatus.active) return;
     
     try {
-      const response = await fetch(`${API_BASE_URL}/monitor/signals`);
+      const response = await fetch(`${API_BASE_URL}/monitor/signals`, {
+        headers: addAuthHeader()
+      });
       const data = await response.json();
       setSignals(data);
     } catch (err) {
@@ -84,9 +99,9 @@ const App = () => {
       
       const response = await fetch(`${API_BASE_URL}/monitor/start`, {
         method: 'POST',
-        headers: {
+        headers: addAuthHeader({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({
           symbols: symbols,
           risk_percentage: parseFloat(riskPercentage),
@@ -115,6 +130,7 @@ const App = () => {
     try {
       const response = await fetch(`${API_BASE_URL}/monitor/stop`, {
         method: 'POST',
+        headers: addAuthHeader()
       });
 
       if (!response.ok) {
@@ -140,27 +156,36 @@ const App = () => {
       // Fetch chart data - using query parameters instead of body
       const chartResponse = await fetch(
         `${API_BASE_URL}/data/chart?symbol=${encodeURIComponent(symbol)}&timeframe=M10&num_bars=50`, 
-        { method: 'POST' }
+        { 
+          method: 'POST',
+          headers: addAuthHeader()
+         }
       );
       
       // Fetch levels - using query parameters
       const levelsResponse = await fetch(
         `${API_BASE_URL}/data/levels?symbol=${encodeURIComponent(symbol)}`, 
-        { method: 'POST' }
+        { 
+          method: 'POST',
+          headers: addAuthHeader()
+        }
       );
 
       // Fetch analysis - using query parameters
       const analysisResponse = await fetch(
         `${API_BASE_URL}/data/analyze?symbol=${encodeURIComponent(symbol)}&risk_percentage=${riskPercentage}&account_size=${accountSize}`, 
-        { method: 'POST' }
+        { 
+          method: 'POST',
+          headers: addAuthHeader()
+        }
       );
 
       // Fetch current price - this endpoint expects a body
       const priceResponse = await fetch(`${API_BASE_URL}/data/price`, {
         method: 'POST',
-        headers: {
+        headers: addAuthHeader({
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({
           symbol: symbol
         }),

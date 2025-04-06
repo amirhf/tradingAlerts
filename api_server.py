@@ -22,6 +22,9 @@ from market_utils import get_current_price
 from regression import calculate_multi_kernel_regression
 from notifications import send_notification
 from fastapi.middleware.cors import CORSMiddleware
+from api_security import configure_security, verify_api_key
+from fastapi import Depends
+
 
 
 # Load environment variables
@@ -98,13 +101,7 @@ class PriceResponse(BaseModel):
 # --- FastAPI App ---
 app = FastAPI(title="MT5 Trading and Monitoring API", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # For development; in production specify actual domains like ["https://yourfrontend.com"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = configure_security(app)
 
 # Update the start_monitoring_background function in api_server.py
 
@@ -162,7 +159,7 @@ def stop_monitoring():
 
 # Add this function to the API server
 @app.post("/notification/test")
-async def test_notification():
+async def test_notification(api_key: str = Depends(verify_api_key)):
     """
     Test the notification system by sending a test message
     """
@@ -183,7 +180,7 @@ async def test_notification():
         raise HTTPException(status_code=500, detail=f"Error testing notification: {str(e)}")
 
 @app.post("/trade/open", response_model=TradeResponse)
-async def open_trade(trade_request: TradeRequest = Body(...)):
+async def open_trade(trade_request: TradeRequest = Body(...), api_key: str = Depends(verify_api_key)):
     """
     Opens a new trade on MetaTrader 5.
     Handles Market, Limit, and Stop orders.
@@ -297,7 +294,7 @@ async def open_trade(trade_request: TradeRequest = Body(...)):
 
 
 @app.post("/monitor/start", response_model=MonitorStatus)
-async def start_monitoring_endpoint(request: MonitorRequest, background_tasks: BackgroundTasks):
+async def start_monitoring_endpoint(request: MonitorRequest, background_tasks: BackgroundTasks, api_key: str = Depends(verify_api_key)):
     """Start monitoring for a list of symbols"""
     global symbols_being_monitored, monitoring_active
 
@@ -354,7 +351,7 @@ async def start_monitoring_endpoint(request: MonitorRequest, background_tasks: B
 
 
 @app.post("/monitor/stop")
-async def stop_monitoring_endpoint():
+async def stop_monitoring_endpoint(api_key: str = Depends(verify_api_key)):
     """Stop monitoring"""
     global monitoring_active
 
@@ -369,7 +366,7 @@ async def stop_monitoring_endpoint():
 
 
 @app.get("/monitor/status", response_model=MonitorStatus)
-async def get_monitor_status():
+async def get_monitor_status(api_key: str = Depends(verify_api_key)):
     """Get current monitoring status"""
     global monitoring_active, symbols_being_monitored, monitoring_start_time
 
@@ -381,7 +378,7 @@ async def get_monitor_status():
 
 
 @app.get("/monitor/signals")
-async def get_signals():
+async def get_signals(api_key: str = Depends(verify_api_key)):
     """Get current signals for all monitored symbols"""
     global all_signals, monitoring_active, signals_lock
 
@@ -397,7 +394,7 @@ async def get_signals():
 
 
 @app.post("/data/price", response_model=PriceResponse)
-async def get_price(request: PriceRequest):
+async def get_price(request: PriceRequest, api_key: str = Depends(verify_api_key)):
     """Get current price for a symbol"""
     try:
         with mt5_connection():
@@ -426,7 +423,7 @@ async def get_price(request: PriceRequest):
 
 
 @app.post("/data/chart")
-async def get_chart_data(symbol: str, timeframe: str = "M10", num_bars: int = 100):
+async def get_chart_data(symbol: str, timeframe: str = "M10", num_bars: int = 100, api_key: str = Depends(verify_api_key)):
     """Get chart data for a symbol"""
     try:
         with mt5_connection():
@@ -467,7 +464,7 @@ async def get_chart_data(symbol: str, timeframe: str = "M10", num_bars: int = 10
 
 
 @app.post("/data/levels")
-async def get_levels(symbol: str):
+async def get_levels(symbol: str, api_key: str = Depends(verify_api_key)):
     """Get price levels for a symbol"""
     try:
         with mt5_connection():
@@ -503,7 +500,7 @@ async def get_levels(symbol: str):
 Updates to the /data/analyze endpoint in api_server.py
 """
 @app.post("/data/analyze")
-async def analyze_symbol(symbol: str, risk_percentage: float = 0.5, account_size: float = 100000):
+async def analyze_symbol(symbol: str, risk_percentage: float = 0.5, account_size: float = 100000, api_key: str = Depends(verify_api_key)):
     """Analyze a symbol for trading signals"""
     logging.info(f"Analyzing symbol: {symbol} with risk {risk_percentage}% on ${account_size} account")
 
@@ -609,7 +606,7 @@ async def analyze_symbol(symbol: str, risk_percentage: float = 0.5, account_size
 
 # --- Health Check Endpoint ---
 @app.get("/health", status_code=200)
-async def health_check():
+async def health_check(api_key: str = Depends(verify_api_key)):
     """Basic health check endpoint."""
     global monitoring_active, symbols_being_monitored
 
