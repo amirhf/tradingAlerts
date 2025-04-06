@@ -11,8 +11,8 @@ const SymbolSelector = ({
   // Common symbols by category
   const symbolCategories = {
     "Major Forex": ["EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDJPY", "USDCHF", "USDCAD"],
-    "Crypto": ["BTCUSD"],
-    "Indices": ["NAS100"]
+    "Crypto": ["BTCUSD","ETHUSD", "LTCUSD"],
+    "Commodities/Indices": ["XAUUSD", "XAGUSD","US500", "US30", "NAS100"],
   };
 
   // Flatten all symbols for easy access
