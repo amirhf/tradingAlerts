@@ -340,26 +340,24 @@ def update_asian_levels(symbol):
             current_date = datetime.now().date()
 
             # Check for Asian session completion
-            if is_asian_session_complete():
-                # Get current day Asian session
-                current_asian = get_asian_session_range(symbol, 0)
-                if current_asian:
-                    asian_levels = {
-                        'date': current_date,
-                        'asian_high': current_asian['high'],
-                        'asian_low': current_asian['low'],
-                        'asian_mid': current_asian['mid']
-                    }
+            # Get current day Asian session
+            current_asian = get_asian_session_range(symbol, 0)
+            if current_asian:
+                asian_levels = {
+                    'date': current_date,
+                    'asian_high': current_asian['high'],
+                    'asian_low': current_asian['low'],
+                    'asian_mid': current_asian['mid']
+                }
 
-                    # Cache the updated levels
-                    _cached_asian_levels[symbol] = asian_levels
-                    print(f"Asian levels updated for {symbol}: {asian_levels}")
+                # Cache the updated levels
+                _cached_asian_levels[symbol] = asian_levels
+                print(f"Asian levels updated for {symbol}: {asian_levels}")
 
-                    return asian_levels
-                else:
-                    print(f"No Asian session data available for {symbol}")
+                return asian_levels
             else:
-                print(f"Asian session not complete yet for {symbol}")
+                print(f"No Asian session data available for {symbol}")
+
 
             return {}
     except Exception as e:
@@ -578,7 +576,7 @@ if __name__ == "__main__":
     try:
         with mt5_connection():
             # Symbol to test (default to EURUSD or use command line argument)
-            symbol = sys.argv[1] if len(sys.argv) > 1 else "USDJPY"
+            symbol = sys.argv[1] if len(sys.argv) > 1 else "GBPUSD"
 
             # Get current MT5 server time
             server_time = get_mt5_server_time()
