@@ -493,7 +493,7 @@ def get_price_levels(symbol):
             print(f"\n--- Fetching price levels for {symbol} at {current_time} ---")
 
             # Update all main levels if needed - this ensures we use consistent data
-            should_update = should_update_daily_levels(symbol) or should_update_weekly_levels(symbol)
+            should_update = True #should_update_daily_levels(symbol) or should_update_weekly_levels(symbol)
             if should_update or symbol not in _cached_daily_levels:
                 # Calculate all levels together using the same data source
                 updated_levels = update_all_levels(symbol)
