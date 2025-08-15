@@ -80,26 +80,34 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
     if not price_levels:
         return candle_type, []
 
-    # Detect touched levels
+    # Detect touched levels - EXACT TOUCHING ONLY
     touch_levels = set()
-
-    # Print some information for debugging
-    print(f"\n--- Analyzing touched levels ---")
-    print(f"Candle OHLC: Open={open0}, High={high0}, Low={low0}, Close={close0}")
-    print(f"Price levels count: {len(price_levels)}")
-
-    # Check each price level
+    
+    # Separate weekly levels for priority handling
+    weekly_levels = {}
+    other_levels = {}
+    
     for level_name, level_value in price_levels.items():
-        # Skip if level value is None or not a number
         if level_value is None or not isinstance(level_value, (int, float)):
             continue
+            
+        if 'weekly' in level_name.lower() or 'week' in level_name.lower():
+            weekly_levels[level_name] = level_value
+        else:
+            other_levels[level_name] = level_value
 
-        # Consider a level touched if it falls within the price range of any candle
-        # or if price closes very close to it (within 0.05% range)
-        threshold = level_value * 0.0005  # 0.05% threshold for "close enough"
+    # Print some information for debugging
+    print(f"\n--- Analyzing touched levels (EXACT TOUCHING ONLY) ---")
+    print(f"Candle OHLC: Open={open0}, High={high0}, Low={low0}, Close={close0}")
+    print(f"Total price levels: {len(price_levels)} (Weekly: {len(weekly_levels)}, Other: {len(other_levels)})")
 
-        # Check if the level is touched by any candle up to lookback
+    # Check each price level for EXACT touching
+    all_levels_to_check = {**weekly_levels, **other_levels}
+    
+    for level_name, level_value in all_levels_to_check.items():
+        # Check if the level is EXACTLY touched by any candle up to lookback
         level_touched = False
+        touching_candle = None
 
         # Check all relevant candles
         for i in range(lookback + 1):
@@ -109,15 +117,24 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
             check_candle = df.iloc[index - i]
             check_high = check_candle["High"]
             check_low = check_candle["Low"]
-            check_close = check_candle["Close"]
 
-            if (check_low <= level_value <= check_high) or abs(check_close - level_value) <= threshold:
+            # EXACT TOUCHING: Level must be within the candle's high-low range
+            if check_low <= level_value <= check_high:
                 touch_levels.add(level_name)
-                candle_desc = "current candle" if i == 0 else f"previous candle {i}"
-                print(f"Level {level_name} = {level_value} touched by {candle_desc}")
+                touching_candle = "current candle" if i == 0 else f"previous candle {i}"
                 level_touched = True
+                
+                # Mark weekly levels as important
+                importance = " [WEEKLY LEVEL]" if level_name in weekly_levels else ""
+                print(f"Level {level_name} = {level_value} TOUCHED by {touching_candle}{importance}")
                 break  # Found a touch, no need to check further candles for this level
 
-    print(f"Found {len(touch_levels)} touched levels: {touch_levels}")
+    # Log summary with emphasis on weekly levels
+    weekly_touched = [level for level in touch_levels if level in weekly_levels]
+    other_touched = [level for level in touch_levels if level in other_levels]
+    
+    print(f"WEEKLY levels touched: {len(weekly_touched)} - {weekly_touched}")
+    print(f"Other levels touched: {len(other_touched)} - {other_touched}")
+    print(f"Total levels touched: {len(touch_levels)}")
 
     return candle_type, list(touch_levels)

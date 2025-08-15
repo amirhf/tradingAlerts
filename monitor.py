@@ -645,9 +645,9 @@ def format_summary_table(all_signals, symbols_data):
     # Create a list to hold table rows
     table_rows = []
 
-    # Add header row
-    table_rows.append(f"{'Symbol':<8} | {'Last Signal':<11} | {'Price':<10} | {'Direction':<9} | {'SL':<10} | {'Lots':<6} | {'Time':<16} | {'Close Levels'}")
-    table_rows.append("-" * 100)
+    # Add header row with signal strength column
+    table_rows.append(f"{'Symbol':<8} | {'Last Signal':<11} | {'Strength':<8} | {'Price':<10} | {'Direction':<9} | {'SL':<10} | {'Lots':<6} | {'Time':<16} | {'Close Levels'}")
+    table_rows.append("-" * 110)
 
     # Add a row for each symbol
     for symbol in sorted(symbols_data.keys()):
@@ -671,13 +671,17 @@ def format_summary_table(all_signals, symbols_data):
             price_str = f"{signal['price']:.{digits}f}"
             sl_str = f"{signal['stop_loss']:.{digits}f}"
 
+            # Get signal strength
+            strength = signal.get('signal_strength', 'NORMAL')
+            strength_short = strength[:8]  # Truncate for table formatting
+
             # Get levels close to current price
             close_levels = get_level_proximity(current_price, price_levels, digits)
             close_levels_str = ", ".join(close_levels) if close_levels else "None"
 
             # Add row
             table_rows.append(
-                f"{symbol:<8} | {direction:<11} | {price_str:<10} | {signal['regression_trend']:<9} | "
+                f"{symbol:<8} | {direction:<11} | {strength_short:<8} | {price_str:<10} | {signal['regression_trend']:<9} | "
                 f"{sl_str:<10} | {signal['position_size']:<6.2f} | {time_str:<16} | {close_levels_str}"
             )
         else:
@@ -690,10 +694,11 @@ def format_summary_table(all_signals, symbols_data):
             close_levels_str = ", ".join(close_levels) if close_levels else "None"
 
             table_rows.append(
-                f"{symbol:<8} | {'NO SIGNAL':<11} | {price_str:<10} | {'-':<9} | {'-':<10} | {'-':<6} | {'-':<16} | {close_levels_str}"
+                f"{symbol:<8} | {'NO SIGNAL':<11} | {'-':<8} | {price_str:<10} | {'-':<9} | {'-':<10} | {'-':<6} | {'-':<16} | {close_levels_str}"
             )
 
     return "\n".join(table_rows)
+
 
 def format_new_signals(all_signals):
     """
@@ -723,16 +728,31 @@ def format_new_signals(all_signals):
                 symbol_info = mt5.symbol_info(symbol)
                 digits = symbol_info.digits if symbol_info is not None else 5
 
+                # Get signal strength and weekly level information
+                strength = signal.get('signal_strength', 'NORMAL')
+                weekly_levels = signal.get('weekly_levels', [])
+                other_levels = signal.get('other_levels', [])
+
+                # Create strength indicator for display
+                strength_indicator = f" [{strength}]" if strength != "NORMAL" else ""
+
                 signal_text = [
-                    f"SIGNAL: {symbol} {direction}",
+                    f"SIGNAL: {symbol} {direction}{strength_indicator}",
                     f"Price: {signal['price']:.{digits}f}",
                     f"Stop Loss: {signal['stop_loss']:.{digits}f}",
                     f"Lots: {signal['position_size']:.2f}",
                     f"Risk: ${signal['risk_amount']:.2f}",
                     f"Regression: {signal['regression_trend']}",
-                    f"Time: {signal['time'].strftime('%Y-%m-%d %H:%M:%S')}",
-                    f"Levels: {', '.join(signal['levels'])}"
+                    f"Time: {signal['time'].strftime('%Y-%m-%d %H:%M:%S')}"
                 ]
+
+                # Add level information with emphasis on weekly levels
+                if weekly_levels:
+                    signal_text.append(f"🔥 WEEKLY LEVELS: {', '.join(weekly_levels)}")
+                if other_levels:
+                    signal_text.append(f"Other Levels: {', '.join(other_levels)}")
+                if not weekly_levels and not other_levels:
+                    signal_text.append(f"Levels: {', '.join(signal['levels'])}")
 
                 new_signals_text.append("\n".join(signal_text))
 
