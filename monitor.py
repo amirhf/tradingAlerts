@@ -8,6 +8,7 @@ import MetaTrader5 as mt5
 import math
 from collections import deque
 import pandas as pd
+import os
 
 from data_fetcher import get_10min_data, get_price_levels
 from candle_patterns import analyse_candle
@@ -499,10 +500,11 @@ def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, r
                             print(f"========================================")
 
                         # Analyze closed candle using the DataFrame approach
+                        lookback_candles = int(os.getenv('LOOKBACK_CANDLES', '2'))
                         candle_type, touch_levels = analyse_candle(
                             current_df,
                             index=-1,
-                            lookback=2,
+                            lookback=lookback_candles,
                             price_levels=price_levels
                         )
 

@@ -477,9 +477,11 @@ app.add_middleware(
     // Group levels by category
     const levelCategories = {
       "Daily Levels": ['today_open', 'yesterday_open', 'yesterday_high', 'yesterday_low', 'yesterday_close'],
+      "Weekly Levels": Object.keys(levels).filter(k => k.startsWith('prev_week')),
       "Pivot Levels": Object.keys(levels).filter(k => k.includes('pivot')),
       "Asian Session": Object.keys(levels).filter(k => k.includes('asian'))
     };
+    console.log(levels);
 
     return (
       <div className="space-y-6">
