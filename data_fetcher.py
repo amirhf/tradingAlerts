@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, time, date
 import math
 import pytz
 from connection import mt5_connection
+import os
 
 # Import the pivot and Asian session calculations
 from pivots import calculate_fibonacci_pivots, get_pivot_levels
@@ -20,6 +21,39 @@ _cached_weekly_levels = {}
 _cached_pivot_levels = {}
 _cached_asian_levels = {}
 _asian_session_status = {}
+
+def get_timeframe_constant(timeframe_str):
+    """
+    Convert timeframe string to MT5 timeframe constant
+    
+    Args:
+        timeframe_str (str): Timeframe string like '1m', '5m', '10m', '15m', '30m', '1h', '4h', '1d'
+    
+    Returns:
+        int: MT5 timeframe constant
+    """
+    timeframe_map = {
+        '1m': mt5.TIMEFRAME_M1,
+        '5m': mt5.TIMEFRAME_M5,
+        '10m': mt5.TIMEFRAME_M10,
+        '15m': mt5.TIMEFRAME_M15,
+        '30m': mt5.TIMEFRAME_M30,
+        '1h': mt5.TIMEFRAME_H1,
+        '4h': mt5.TIMEFRAME_H4,
+        '1d': mt5.TIMEFRAME_D1
+    }
+    
+    return timeframe_map.get(timeframe_str.lower(), mt5.TIMEFRAME_M10)
+
+def get_configured_timeframe():
+    """
+    Get the configured timeframe from environment variables
+    
+    Returns:
+        int: MT5 timeframe constant
+    """
+    timeframe_str = os.getenv('TIMEFRAME', '10m')
+    return get_timeframe_constant(timeframe_str)
 
 def is_after_2am_est():
     """
@@ -80,7 +114,14 @@ def get_mt5_server_time():
 
 def get_10min_data(symbol, num_bars=100):
     """
-    Get 10-minute data for the specified symbol
+    Backward compatibility function for get_10min_data
+    This function is deprecated, use get_data() instead
+    """
+    return get_data(symbol, num_bars)
+
+def get_data(symbol, num_bars=100, timeframe=None):
+    """
+    Get data for the specified symbol
 
     Args:
         symbol (str): The trading symbol to fetch data for
@@ -92,7 +133,8 @@ def get_10min_data(symbol, num_bars=100):
     try:
         with mt5_connection():
             # First try using copy_rates_from_pos which gets the most recent data
-            timeframe = mt5.TIMEFRAME_M10
+            if timeframe is None:
+                timeframe = get_configured_timeframe()
             bars = mt5.copy_rates_from_pos(symbol, timeframe, 0, num_bars)
 
             if bars is None or len(bars) == 0:
@@ -115,7 +157,7 @@ def get_10min_data(symbol, num_bars=100):
                 # Check if there are any gaps larger than expected (> 15 minutes for 10-minute bars)
                 has_gaps = any(diff > 15 for diff in time_diffs)
 
-                # If we detect gaps and we have at least some data, try an alternative approach
+                # If we detect gaps, and we have at least some data, try an alternative approach
                 if has_gaps and len(df) > 0:
                     print(f"Detected gaps in data for {symbol}, trying alternative retrieval method...")
 
@@ -169,7 +211,7 @@ def get_10min_data(symbol, num_bars=100):
 
             return df
     except Exception as e:
-        print(f"Error in get_10min_data: {e}")
+        print(f"Error in get_data: {e}")
         return None
 
 def should_update_daily_levels(symbol):

@@ -10,7 +10,7 @@ from collections import deque
 import pandas as pd
 import os
 
-from data_fetcher import get_10min_data, get_price_levels
+from data_fetcher import get_10min_data, get_price_levels, get_configured_timeframe
 from candle_patterns import analyse_candle
 from notifications import send_notification
 # Import the regression indicator function
@@ -536,8 +536,9 @@ def monitor_symbol(symbol, symbol_data, all_signals, signals_lock, stop_event, r
 
                             # Calculate regression indicator values
                             try:
+                                timeframe = get_configured_timeframe()
                                 regression_value, regression_color, regression_direction = calculate_multi_kernel_regression(
-                                    symbol, mt5.TIMEFRAME_M10, bandwidth=25
+                                    symbol, timeframe, bandwidth=25
                                 )
                                 regression_trend = "UPTREND" if regression_direction else "DOWNTREND"
                             except Exception as e:

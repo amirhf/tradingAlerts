@@ -16,12 +16,10 @@ from connection import mt5_connection
 
 # Import from existing modules
 from monitor import monitor_multiple_symbols, calculate_position_size
-from data_fetcher import get_10min_data, get_price_levels
+from data_fetcher import get_10min_data, get_price_levels, get_configured_timeframe
 from candle_patterns import analyse_candle
 from market_utils import get_current_price
 from regression import calculate_multi_kernel_regression
-from notifications import send_notification
-from fastapi.middleware.cors import CORSMiddleware
 from api_security import configure_security, verify_api_key
 from fastapi import Depends
 
@@ -578,8 +576,9 @@ async def analyze_symbol(symbol: str, risk_percentage: float = 0.5, account_size
 
                 # Calculate regression indicator
                 try:
+                    timeframe = get_configured_timeframe()
                     regression_value, regression_color, regression_direction = calculate_multi_kernel_regression(
-                        symbol, mt5.TIMEFRAME_M10, bandwidth=25
+                        symbol, timeframe, bandwidth=25
                     )
                     regression_trend = "UPTREND" if regression_direction else "DOWNTREND"
                 except Exception as e:
