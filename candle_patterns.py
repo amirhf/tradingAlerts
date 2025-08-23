@@ -68,13 +68,15 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
     high1, low1, close1, open1 = prev1["High"], prev1["Low"], prev1["Close"], prev1["Open"]
     high2, low2, close2, open2 = prev2["High"], prev2["Low"], prev2["Close"], prev2["Open"]
 
-    # Detect candle patterns
-    bull_engulfing = low0 < low1 and high0 > high1 and close0 > open0
-    bear_engulfing = high0 > high1 and low0 < low1 and close0 < open0
+    # Detect candle patterns - IMPROVED LOGIC
+    # Engulfing patterns
+    bull_engulfing = low0 < low1 and high0 > high1 and close0 > open0 and close0 > close1
+    bear_engulfing = high0 > high1 and low0 < low1 and close0 < open0 and close0 < close1
 
+    # Inside failure candles (IFC) - more restrictive
     large_body = abs(close0 - open0) >= 0.5 * (high0 - low0)
-    bull_ifc = close0 > high1 and close0 > high2 and large_body and close0 > open0
-    bear_ifc = close0 < low1 and close0 < low2 and large_body and close0 < open0
+    bull_ifc = close0 > high1 and close0 > high2 and large_body and close0 > open0 and (close0 - open0) > (high0 - low0) * 0.6
+    bear_ifc = close0 < low1 and close0 < low2 and large_body and close0 < open0 and (open0 - close0) > (high0 - low0) * 0.6
 
     # Determine candle type
     candle_type = "bull" if bull_engulfing or bull_ifc else "bear" if bear_engulfing or bear_ifc else "none"
@@ -86,8 +88,8 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
     # Get configurable threshold from environment
     level_touch_threshold_pct = float(os.getenv('LEVEL_TOUCH_THRESHOLD', '0.05'))
     
-    # Detect touched levels - ADVANCED TOUCHING LOGIC WITH DIRECTIONAL CRITERIA
-    touch_levels = set()
+    # STEP 1: First find which levels are touched by ANY candle in lookback period
+    # STEP 2: Then apply directional criteria only if a pattern is detected
     
     # Separate weekly levels for priority handling
     weekly_levels = {}
@@ -103,21 +105,21 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
             other_levels[level_name] = level_value
 
     # Print some information for debugging
-    print(f"\n--- Analyzing touched levels (ADVANCED TOUCHING LOGIC) ---")
-    print(f"Candle OHLC: Open={open0}, High={high0}, Low={low0}, Close={close0}")
+    print(f"\n--- Analyzing touched levels (IMPROVED LOGIC) ---")
+    print(f"Current Candle OHLC: Open={open0:.5f}, High={high0:.5f}, Low={low0:.5f}, Close={close0:.5f}")
     print(f"Candle Type: {candle_type}")
     print(f"Level touch threshold: {level_touch_threshold_pct}%")
     print(f"Total price levels: {len(price_levels)} (Weekly: {len(weekly_levels)}, Other: {len(other_levels)})")
 
-    # Check each price level for advanced touching logic
+    # IMPROVED LEVEL TOUCHING LOGIC
+    touch_levels = set()
     all_levels_to_check = {**weekly_levels, **other_levels}
     
     for level_name, level_value in all_levels_to_check.items():
-        # Check if the level is touched by any candle up to lookback
         level_touched = False
-        touching_candle = None
+        touching_candle_info = None
 
-        # Check all relevant candles
+        # Check all relevant candles for basic level interaction
         for i in range(lookback + 1):
             if i >= len(df) or abs(index - i) >= len(df):
                 break
@@ -127,44 +129,49 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
             check_low = check_candle["Low"]
             check_close = check_candle["Close"]
 
-            # Calculate threshold as percentage of level value
-            threshold = level_value * (level_touch_threshold_pct / 100)
+            # Calculate threshold - improved to handle different price ranges
+            if level_value > 1000:  # For high-value instruments (indices, etc.)
+                threshold = level_value * (level_touch_threshold_pct / 100)
+            else:  # For forex and lower-value instruments
+                threshold = max(level_value * (level_touch_threshold_pct / 100), 0.0001)
 
-            # ADVANCED TOUCHING LOGIC WITH DIRECTIONAL CRITERIA
-            candle_touches_level = False
-            
             # Check if candle range intersects with level threshold
             level_range_low = level_value - threshold
             level_range_high = level_value + threshold
             
-            # Basic range check: does the candle's high-low range overlap with level threshold range?
-            if check_low <= level_range_high and check_high >= level_range_low:
-                # Now apply directional criteria based on candle type
-                if candle_type == "bull":
-                    # For bullish patterns, level is only considered touched if close is ABOVE the level
-                    if check_close > level_value:
-                        candle_touches_level = True
-                elif candle_type == "bear":
-                    # For bearish patterns, level is only considered touched if close is BELOW the level
-                    if check_close < level_value:
-                        candle_touches_level = True
-                else:
-                    # For non-pattern candles, use basic proximity check
-                    candle_touches_level = False
-
-            if candle_touches_level:
-                touch_levels.add(level_name)
-                touching_candle = "current candle" if i == 0 else f"previous candle {i}"
-                level_touched = True
+            # Basic proximity check: does the candle touch the level within threshold?
+            candle_touches_level_basic = (check_low <= level_range_high and check_high >= level_range_low)
+            
+            if candle_touches_level_basic:
+                # APPLY DIRECTIONAL CRITERIA ONLY FOR PATTERN CANDLES
+                passes_directional_check = True
                 
-                # Mark weekly levels as important
-                importance = " [WEEKLY LEVEL]" if level_name in weekly_levels else ""
-                direction_info = f" (close={check_close:.5f} vs level={level_value:.5f})"
-                print(f"Level {level_name} = {level_value} TOUCHED by {touching_candle}{importance}{direction_info}")
-                break
+                # Only apply directional criteria to the current candle (i=0) when pattern is detected
+                if i == 0 and candle_type != "none":
+                    if candle_type == "bull":
+                        # For bullish patterns, current candle close must be above the level
+                        passes_directional_check = check_close > level_value
+                    elif candle_type == "bear":
+                        # For bearish patterns, current candle close must be below the level
+                        passes_directional_check = check_close < level_value
+                
+                if passes_directional_check:
+                    touch_levels.add(level_name)
+                    touching_candle_info = "current candle" if i == 0 else f"previous candle {i}"
+                    level_touched = True
+                    
+                    # Enhanced logging
+                    importance = " [WEEKLY LEVEL]" if level_name in weekly_levels else ""
+                    direction_info = f" (close={check_close:.5f} vs level={level_value:.5f}, threshold=±{threshold:.5f})"
+                    pattern_info = f" [PATTERN: {candle_type.upper()}]" if candle_type != "none" and i == 0 else ""
+                    print(f"✓ Level {level_name} = {level_value:.5f} TOUCHED by {touching_candle_info}{importance}{direction_info}{pattern_info}")
+                    break
+                else:
+                    # Level was touched but failed directional criteria
+                    print(f"✗ Level {level_name} = {level_value:.5f} touched by {touching_candle_info} but failed directional criteria (close={check_close:.5f})")
 
         if not level_touched:
-            print(f"Level {level_name} = {level_value} NOT touched")
+            print(f"○ Level {level_name} = {level_value:.5f} NOT touched")
 
     # Convert to list and prioritize weekly levels
     touched_levels_list = []
@@ -175,8 +182,10 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
     touched_levels_list.extend(sorted(weekly_touched))
     touched_levels_list.extend(sorted(other_touched))
 
-    print(f"Final touched levels: {touched_levels_list}")
-    print(f"Weekly levels touched: {weekly_touched}")
-    print(f"Other levels touched: {other_touched}")
+    print(f"\n📊 SUMMARY:")
+    print(f"   Pattern: {candle_type.upper() if candle_type != 'none' else 'No pattern detected'}")
+    print(f"   Weekly levels touched: {weekly_touched}")
+    print(f"   Other levels touched: {other_touched}")
+    print(f"   Total levels: {len(touched_levels_list)}")
 
     return candle_type, touched_levels_list
