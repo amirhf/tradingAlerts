@@ -81,6 +81,13 @@ def analyse_candle(df, index=-1, lookback=2, price_levels=None):
     # Determine candle type
     candle_type = "bull" if bull_engulfing or bull_ifc else "bear" if bear_engulfing or bear_ifc else "none"
 
+    # CRITICAL REQUIREMENT: Only generate signals if the CURRENT candle is a pattern
+    if candle_type == "none":
+        print(f"\n🚫 NO SIGNAL: Current candle is not a bullish or bearish pattern")
+        print(f"   Pattern required: Engulfing or IFC")
+        print(f"   Current candle: {candle_type}")
+        return candle_type, []
+
     # If no price levels are provided, skip level detection
     if not price_levels:
         return candle_type, []
