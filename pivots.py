@@ -11,7 +11,7 @@ def calculate_fibonacci_pivots(ohlc_data):
         ohlc_data (dict): Dictionary with high, low, close values
 
     Returns:
-        dict: Dictionary containing the pivot levels (P, R1, R2, S1, S2)
+        dict: Dictionary containing the pivot levels (P, R1, R2, R3, S1, S2, S3)
     """
     high = ohlc_data["high"]
     low = ohlc_data["low"]
@@ -24,16 +24,20 @@ def calculate_fibonacci_pivots(ohlc_data):
     # Fibonacci ratios for pivot levels
     r1 = p + 0.382 * range_hl  # Resistance 1 - 38.2% Fibonacci ratio
     r2 = p + 0.618 * range_hl  # Resistance 2 - 61.8% Fibonacci ratio
+    r3 = p + 1.000 * range_hl  # Resistance 3 - 100% Fibonacci ratio
     s1 = p - 0.382 * range_hl  # Support 1 - 38.2% Fibonacci ratio
     s2 = p - 0.618 * range_hl  # Support 2 - 61.8% Fibonacci ratio
+    s3 = p - 1.000 * range_hl  # Support 3 - 100% Fibonacci ratio
 
     # Return the pivot levels
     return {
         "P": p,
         "R1": r1,
         "R2": r2,
+        "R3": r3,
         "S1": s1,
-        "S2": s2
+        "S2": s2,
+        "S3": s3
     }
 
 
@@ -54,11 +58,13 @@ def check_pivot_signals(symbol, current_price, pivot_data, timeframe):
 
     # Extract pivot levels
     levels = {
+        "R3": pivot_data.get("R3"),
         "R2": pivot_data.get("R2"),
         "R1": pivot_data.get("R1"),
         "P": pivot_data.get("P"),
         "S1": pivot_data.get("S1"),
-        "S2": pivot_data.get("S2")
+        "S2": pivot_data.get("S2"),
+        "S3": pivot_data.get("S3")
     }
 
     # Check for price near pivot levels
